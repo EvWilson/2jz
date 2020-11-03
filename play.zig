@@ -2,6 +2,7 @@ const std = @import("std");
 const print = std.debug.print;
 const HashMap = std.AutoHashMap;
 const allocator = std.testing.allocator;
+const ArrayList = std.ArrayList;
 
 test "play" {
     print("\n", .{});
@@ -59,8 +60,21 @@ test "play" {
         }
         print("physics mask: {}\n", .{mask});
     }
+
+    // Generate bitmask from structs themselves
+    {
+        const p: Point = .{ .x = 2, .y = 3 };
+        const v: Velocity = .{ .dir = 2, .magnitude = 200 };
+        const physics = .{ p, v };
+        var mask: BitMaskField = 0;
+        inline for (physics) |str| {
+            const field = map.get(@typeName(@TypeOf(str)));
+            mask |= field.?;
+        }
+        print("physics mask on actual structs: {}\n", .{mask});
+    }
 }
 
-const Registrar = struct {
-    const Self = @This();
-};
+fn Archetype(comptime str: anytype) type {
+    return struct {};
+}
