@@ -186,12 +186,13 @@ test "untyped memory" {
     }
 }
 
-fn Arch1(comptime comp_types: anytype) type {
+fn Archetype(comptime comp_types: anytype) type {
     const TypeInfo = std.builtin.TypeInfo;
 
     const info = @typeInfo(@TypeOf(comp_types));
     comptime const field_len = info.Struct.fields.len;
 
+    // Create a struct from the passed in types to be used as a return value
     const bundle_data: TypeInfo.Struct = .{
         .layout = .Auto,
         .fields = fields: {
@@ -199,13 +200,11 @@ fn Arch1(comptime comp_types: anytype) type {
 
             inline for (info.Struct.fields) |field, idx| {
                 const new_field = TypeInfo.StructField{
-                    .name = &[_]u8{idx + 48},
+                    .name = @typeName(comp_types[idx]),
                     .field_type = comp_types[idx],
-                    // TODO: get zeroed representation of this type?
-                    //.default_value = field.default_value.?, <-- this get type, which is wrong
                     .default_value = std.mem.zeroInit(comp_types[idx], .{}),
-                    .is_comptime = field.is_comptime,
-                    .alignment = 0,
+                    .is_comptime = false,
+                    .alignment = field.alignment,
                 };
                 arr[idx] = new_field;
             }
@@ -213,21 +212,63 @@ fn Arch1(comptime comp_types: anytype) type {
             break :fields &arr;
         },
         .decls = &[_]TypeInfo.Declaration{},
-        .is_tuple = true,
+        .is_tuple = false,
     };
     const bundle_info = TypeInfo{ .Struct = bundle_data };
     const BundleType = @Type(bundle_info);
+
+    // Create another struct from the passed in types to be used as a mutable
+    // return value
+    const bundle_mut_data: TypeInfo.Struct = .{
+        .layout = .Auto,
+        .fields = fields: {
+            comptime var arr: [field_len]TypeInfo.StructField = undefined;
+
+            inline for (info.Struct.fields) |field, idx| {
+                //const type_ptr = TypeInfo.Pointer{
+                //    .size = .One,
+                //    .is_const = false,
+                //    .is_volatile = false,
+                //    .alignment = @sizeOf(usize),
+                //    .child = comp_types[idx],
+                //    .is_allowzero = true,
+                //    .sentinel = null,
+                //};
+                const new_field = TypeInfo.StructField{
+                    .name = @typeName(comp_types[idx]),
+                    //.field_type = @Type(TypeInfo{ .Pointer = type_ptr }),
+                    .field_type = *comp_types[idx],
+                    .default_value = null,
+                    .is_comptime = false,
+                    .alignment = field.alignment,
+                };
+                arr[idx] = new_field;
+            }
+
+            break :fields &arr;
+        },
+        .decls = &[_]TypeInfo.Declaration{},
+        .is_tuple = false,
+    };
+    const bundle_mut_info = TypeInfo{ .Struct = bundle_mut_data };
+    const BundleTypeMut = @Type(bundle_mut_info);
 
     return struct {
         const Self = @This();
 
         allocator: *Allocator,
+        // Total size of all structs in the arch
         bundle_size: u32,
+        // Number of bundles arch can currently hold
         capacity: u32,
+        // Points to next available mem for bundles
         cursor: u32,
         entity_ids: []u32,
+        // Names of constituent component types
         names: [field_len][]const u8,
+        // Sizes of constituent component types
         sizes: [field_len]u32,
+        // Memory to hold data
         type_mem: []u8,
 
         fn init(alloc: *Allocator) !Self {
@@ -261,7 +302,7 @@ fn Arch1(comptime comp_types: anytype) type {
 
         fn put(self: *Self, id: u32, bundle: anytype) void {
             if (self.cursor == self.capacity) {
-                print("cursor ({}) met capacity({})\n", .{ self.cursor, self.capacity });
+                print("cursor ({}) met capacity({}). GROWING MEM REGION.\n", .{ self.cursor, self.capacity });
                 self.grow();
             }
             comptime var offset = 0;
@@ -284,18 +325,31 @@ fn Arch1(comptime comp_types: anytype) type {
             var struct_mem = self.type_mem;
             struct_mem.ptr += idx * self.bundle_size;
 
-            //var result: @TypeOf(components) = undefined;
-            //inline for (components) |comp, i| {
-            //    //@field(result, @typeName(comp)) = @bitCast(comp, struct_mem);
-            //    const comp_size = @sizeOf(comp);
-            //    //result[i] = @as(comp, struct_mem[0..comp_size]);
-            //    struct_mem.ptr += comp_size;
-            //}
+            var result: BundleType = .{};
+            inline for (info.Struct.fields) |field, i| {
+                const field_type = field.default_value.?;
+                // For the current field, set it to a dereferenced pointer of
+                // the current location in the data array
+                @field(result, @typeName(field_type)) =
+                    @ptrCast(*field_type, @alignCast(@sizeOf(field_type), struct_mem)).*;
+                struct_mem.ptr += @sizeOf(field_type);
+            }
 
-            // This is a tuple of types, not of the structs I need
-            var result: *BundleType = @ptrCast(*BundleType, struct_mem);
+            return &result;
+        }
 
-            return result;
+        fn get_idx_mut(self: *Self, idx: usize) *BundleTypeMut {
+            var struct_mem = self.type_mem;
+            struct_mem.ptr += idx * self.bundle_size;
+
+            var result: BundleTypeMut = undefined;
+            inline for (info.Struct.fields) |field, i| {
+                const field_type = field.default_value.?;
+                @field(result, @typeName(field_type)) =
+                    @ptrCast(*field_type, @alignCast(@sizeOf(field_type), struct_mem));
+                struct_mem.ptr += @sizeOf(field_type);
+            }
+            return &result;
         }
 
         fn has(self: *Self, comptime comp_type: type) bool {
@@ -313,29 +367,73 @@ fn Arch1(comptime comp_types: anytype) type {
             std.debug.print("UNIMPLEMENTED: hit archetype grow function\n", .{});
             std.debug.assert(false);
         }
+
+        fn print_at(self: *Self, idx: usize) void {
+            std.debug.print("arch type mem: ", .{});
+            var i: usize = 0;
+            while (i < self.bundle_size) : (i += 1) {
+                std.debug.print("{} ", .{self.type_mem[i]});
+            }
+            std.debug.print("\n", .{});
+        }
     };
 }
 
 test "" {
     const eql = std.mem.eql;
-    print("\n", .{});
 
-    var arch = try Arch1(.{ Point, Velocity }).init(allocator);
+    // Setup
+    var arch = try Archetype(.{ Point, Velocity }).init(allocator);
     defer arch.deinit();
+    const p = Point{ .x = 1, .y = 2 };
+    const v = Velocity{ .dir = 3, .magnitude = 4 };
 
     expect(eql(u8, arch.names[0], "Point"));
     expect(arch.sizes[0] == 8);
+
+    // `has` testing
     expect(arch.has(Point));
     expect(!arch.has(HitPoints));
 
-    const p = Point{ .x = 1, .y = 2 };
-    const v = Velocity{ .dir = 3, .magnitude = 4 };
+    // `put` testing
     expect(arch.cursor == 0);
     arch.put(0, .{ p, v });
     expect(arch.cursor == 1);
-    //print("arch type mem after first insert: {}{}{}{}{}\n", .{ arch.type_mem[0], arch.type_mem[1], arch.type_mem[2], arch.type_mem[3], arch.type_mem[4] });
 
-    const bundle = arch.get_idx(0);
-    print("bundle contents: {}\n", .{bundle});
-    //print("bundle at 0: {}\n", .{@as(Point, bundle[0]).x});
+    // `get` testing - non-mutable
+    // Can mutate struct values, but not underlying memory
+    var bundle = arch.get_idx(0);
+    expect(bundle.Point.x == 1);
+    expect(bundle.Point.y == 2);
+    expect(bundle.Velocity.dir == 3);
+    expect(bundle.Velocity.magnitude == 4);
+    bundle.Point.x += 10;
+    expect(bundle.Point.x == 11);
+    // Check first 4 bytes of memory (Point x) to make sure it's unaffected
+    var i: usize = 0;
+    var total: usize = 0;
+    while (i < 4) : (i += 1) {
+        total += arch.type_mem[i];
+    }
+    expect(total == 1);
+
+    // `get` testing - mutable
+    // Struct member mutations directly mutate underlying archetype memory
+    var mut_bundle = arch.get_idx_mut(0);
+    expect(mut_bundle.Point.x == 1);
+    expect(mut_bundle.Point.y == 2);
+    expect(mut_bundle.Velocity.dir == 3);
+    expect(mut_bundle.Velocity.magnitude == 4);
+    mut_bundle.Point.x += 10;
+    expect(mut_bundle.Point.x == 11);
+    // Leaving this check in because this section was rather wonky for a while
+    expect(@ptrToInt(arch.type_mem.ptr) == @ptrToInt(mut_bundle.Point));
+    expect(@ptrToInt(arch.type_mem.ptr) + @sizeOf(Point) == @ptrToInt(mut_bundle.Velocity));
+    // Check first 4 bytes of memory (Point x) to make sure it's been mutated
+    i = 0;
+    total = 0;
+    while (i < 4) : (i += 1) {
+        total += arch.type_mem[i];
+    }
+    expect(total == 11);
 }
