@@ -1,3 +1,7 @@
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+const assert = std.debug.assert;
+
 const Entities = struct {
     const Self = @This();
 
@@ -49,6 +53,7 @@ test "entities test" {
     const test_allocator = std.testing.allocator;
     const print = std.debug.print;
     const expect = std.testing.expect;
+    const ArrayList = std.ArrayList;
 
     const ENTITY_TOTAL = 1024;
 
