@@ -2,8 +2,6 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const AutoHashMap = std.AutoHashMap;
 
-const Archetype = @import("./archetype.zig").Archetype;
-
 const World = struct {
     const Self = @This();
     const DEFAULT_STARTING_CAPACITY = 1024;

@@ -7,7 +7,50 @@ const comptime_utils = @import("./comptime_utils.zig");
 const typeFromBundle = comptime_utils.typeFromBundle;
 const typeFromBundleMut = comptime_utils.typeFromBundleMut;
 
-pub fn Archetype(comptime comp_types: anytype) type {
+// TODO: fix this and understand it
+// Taken from Alex Naskos' Runtime Polymorphism talk, 14:53
+const Archetype = struct {
+    const VTable = struct { init: fn (*Allocator) void };
+    vtable: *const VTable,
+    object: usize,
+
+    fn init(self: @This(), ctx: *usize) void {
+        self.vtable.draw(self.object, ctx);
+    }
+
+    fn make(obj: anytype) @This() {
+        const PtrType = @TypeOf(obj);
+        return .{
+            .vtable = &comptime VTable{
+                .init = struct {
+                    fn init(ptr: usize, ctx: *usize) void {
+                        const self = @intToPtr(PtrType, ptr);
+                        @call(.{ .modifier = .always_inline }, std.meta.Child(PtrType).init, .{ self, ctx });
+                    }
+                }.init,
+                .object = @ptrToInt(obj),
+            },
+        };
+    }
+};
+
+test "vtable" {
+    const eql = std.mem.eql;
+    const allocator = std.testing.allocator;
+    const expect = std.testing.expect;
+
+    const Point = struct { x: u32, y: u32 };
+    const Velocity = struct { dir: u6, magnitude: u32 };
+    const HitPoints = struct { hp: u32 };
+
+    // Setup
+    var arch = try ArchetypeGen(.{ Point, Velocity }).init(allocator);
+    defer arch.deinit();
+
+    var dyn = Archetype.make(&arch);
+}
+
+pub fn ArchetypeGen(comptime comp_types: anytype) type {
     const info = @typeInfo(@TypeOf(comp_types));
 
     // Create a struct from the passed in types to be used as a return value
@@ -145,7 +188,7 @@ test "archetype test" {
     const HitPoints = struct { hp: u32 };
 
     // Setup
-    var arch = try Archetype(.{ Point, Velocity }).init(allocator);
+    var arch = try ArchetypeGen(.{ Point, Velocity }).init(allocator);
     defer arch.deinit();
     const p = Point{ .x = 1, .y = 2 };
     const v = Velocity{ .dir = 3, .magnitude = 4 };
