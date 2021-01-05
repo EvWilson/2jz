@@ -148,3 +148,11 @@ test "untyped memory" {
         }
     }
 }
+
+fn print_address(addr: usize) void {
+    std.debug.print("address: {}\n", .{addr});
+}
+test "ptr as int" {
+    const p: Point = .{ .x = 12, .y = 34 };
+    print_address(@ptrToInt(&p));
+}

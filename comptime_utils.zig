@@ -47,9 +47,15 @@ pub fn typeFromBundleMut(comptime comp_types: anytype) type {
                 //    .is_allowzero = true,
                 //    .sentinel = null,
                 //};
+                //var ptr_info = @typeInfo(*comp_types[idx]);
+                //ptr_info.Pointer.is_allowzero = true;
+                //if (ptr_info.Pointer.is_allowzero == false) {
+                //    @compileError("ptr must be zeroable");
+                //}
                 const new_field = TypeInfo.StructField{
                     .name = @typeName(comp_types[idx]),
                     //.field_type = @Type(TypeInfo{ .Pointer = type_ptr }),
+                    //.field_type = @Type(ptr_info),
                     .field_type = *comp_types[idx],
                     .default_value = null,
                     .is_comptime = false,

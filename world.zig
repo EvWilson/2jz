@@ -1,6 +1,9 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const AutoHashMap = std.AutoHashMap;
+const ArrayList = std.ArrayList;
+
+const Archetype = @import("./archetype.zig").Archetype;
 
 const World = struct {
     const Self = @This();
@@ -8,11 +11,9 @@ const World = struct {
     const MaskType = u64;
 
     allocator: *Allocator,
-    arch_map: AutoHashMap(u32, u32),
+    arch_map: AutoHashMap(u32, Archetype),
     capacity: usize,
     mask_map: AutoHashMap([]const u8, MaskType),
-    //entities: Entities,
-    //registry: anytype,
 
     pub fn init(allocator: *Allocator, init_capacity: usize, comptime registry: anytype) !Self {
         var comp_map = AutoHashMap([]const u8, MaskType).init(allocator);
@@ -24,11 +25,9 @@ const World = struct {
 
         return Self{
             .allocator = allocator,
-            .arch_map = AutoHashMap(u32, u32).init(allocator),
+            .arch_map = AutoHashMap(u32, Archetype).init(allocator),
             .capacity = init_capacity,
             .mask_map = comp_map,
-            //.entities = try Entities.initCapacity(allocator, init_capacity),
-            //.registry = registry,
         };
     }
 
@@ -37,8 +36,6 @@ const World = struct {
         self.arch_map.deinit();
         // component map
         self.mask_map.deinit();
-        // entities
-        //self.entities.deinit();
     }
 
     fn spawn(self: *Self, comptime args: anytype) !void {
