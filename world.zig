@@ -3,15 +3,24 @@ const Allocator = std.mem.Allocator;
 const AutoHashMap = std.AutoHashMap;
 const ArrayList = std.ArrayList;
 
-const Archetype = @import("./archetype.zig").Archetype;
+const typeFromBundle = @import("./comptime_utils.zig").typeFromBundle;
+const arch_file = @import("./archetype.zig");
+const Archetype = arch_file.Archetype;
+const ArchetypeGen = arch_file.ArchetypeGen;
+
+fn coerceToBundle(comptime T: type, comptime args: anytype) T {
+    var ret: T = .{};
+    std.debug.print("point ret: {}\n", .{ret});
+    return ret;
+}
 
 const World = struct {
     const Self = @This();
-    const DEFAULT_STARTING_CAPACITY = 1024;
+    const DEFAULT_CAPACITY = 1024;
     const MaskType = u64;
 
     allocator: *Allocator,
-    arch_map: AutoHashMap(u32, Archetype),
+    arch_map: AutoHashMap(MaskType, Archetype),
     capacity: usize,
     mask_map: AutoHashMap([]const u8, MaskType),
 
@@ -25,13 +34,20 @@ const World = struct {
 
         return Self{
             .allocator = allocator,
-            .arch_map = AutoHashMap(u32, Archetype).init(allocator),
+            .arch_map = AutoHashMap(MaskType, Archetype).init(allocator),
             .capacity = init_capacity,
             .mask_map = comp_map,
         };
     }
 
     fn deinit(self: *Self) void {
+        // archetypes
+        var it = self.arch_map.iterator();
+        var maybe_entry = it.next();
+        while (maybe_entry) |entry| {
+            entry.value.deinit();
+            maybe_entry = it.next();
+        }
         // arch map
         self.arch_map.deinit();
         // component map
@@ -39,12 +55,27 @@ const World = struct {
     }
 
     fn spawn(self: *Self, comptime args: anytype) !void {
+        const BundleType = typeFromBundle(args);
         // Create mask from component set
         const mask = self.getComponentMask(args);
+        const bundle = coerceToBundle(BundleType, args);
+        var maybe_arch = self.arch_map.get(mask);
+        if (maybe_arch) |arch| {
+            // TODO: get proper entity id
+            arch.put(0, @ptrToInt(&bundle));
+        } else {
+            // TODO: heap allocate this arch or the deinit routine segfaults
+            // Probably want to pass allocator to make function
+            // PREV
+            //var arch = try ArchetypeGen(BundleType).init(self.allocator);
+            //var dyn = Archetype.make(BundleType, &arch, self.allocator);
+            // NEW
+            var dyn = try Archetype.make(BundleType, self.allocator);
+            try self.arch_map.put(mask, dyn);
+        }
     }
 
     fn query(self: *Self, comptime args: anytype) void {
-        std.debug.print("in query now\n", .{});
         // Only take tuples as component bundles
         const type_info = @typeInfo(@TypeOf(args));
         if (type_info != .Struct or type_info.Struct.is_tuple != true) {
@@ -101,6 +132,5 @@ test "world test" {
 
     const mask = world.getComponentMask(.{ Point, Velocity });
     const mask2 = world.getComponentMask(.{ p, v });
-    //std.debug.print("mask: {}, mask2: {}\n", .{ mask, mask2 });
     expect(mask == mask2);
 }

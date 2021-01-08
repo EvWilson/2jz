@@ -4,16 +4,23 @@ const TypeInfo = std.builtin.TypeInfo;
 pub fn typeFromBundle(comptime comp_types: anytype) type {
     const info = @typeInfo(@TypeOf(comp_types));
     const field_len = info.Struct.fields.len;
+    const is_types = if (@TypeOf(comp_types[0]) == type) true else false;
     const bundle_data: TypeInfo.Struct = .{
         .layout = .Auto,
         .fields = fields: {
             comptime var arr: [field_len]TypeInfo.StructField = undefined;
 
             inline for (info.Struct.fields) |field, idx| {
+                comptime var field_type: type = undefined;
+                if (is_types) {
+                    field_type = comp_types[idx];
+                } else {
+                    field_type = @TypeOf(comp_types[idx]);
+                }
                 const new_field = TypeInfo.StructField{
-                    .name = @typeName(comp_types[idx]),
-                    .field_type = comp_types[idx],
-                    .default_value = std.mem.zeroInit(comp_types[idx], .{}),
+                    .name = @typeName(field_type),
+                    .field_type = field_type,
+                    .default_value = std.mem.zeroInit(field_type, .{}),
                     .is_comptime = false,
                     .alignment = field.alignment,
                 };
@@ -29,34 +36,19 @@ pub fn typeFromBundle(comptime comp_types: anytype) type {
     return @Type(bundle_info);
 }
 
-pub fn typeFromBundleMut(comptime comp_types: anytype) type {
-    const info = @typeInfo(@TypeOf(comp_types));
+pub fn makeBundleMut(comptime Bundle: type) type {
+    const info = @typeInfo(Bundle);
     const field_len = info.Struct.fields.len;
     const bundle_mut_data: TypeInfo.Struct = .{
-        .layout = .Auto,
+        // TODO: align to info
+        .layout = info.Struct.layout,
         .fields = fields: {
             comptime var arr: [field_len]TypeInfo.StructField = undefined;
 
             inline for (info.Struct.fields) |field, idx| {
-                //const type_ptr = TypeInfo.Pointer{
-                //    .size = .One,
-                //    .is_const = false,
-                //    .is_volatile = false,
-                //    .alignment = @sizeOf(usize),
-                //    .child = comp_types[idx],
-                //    .is_allowzero = true,
-                //    .sentinel = null,
-                //};
-                //var ptr_info = @typeInfo(*comp_types[idx]);
-                //ptr_info.Pointer.is_allowzero = true;
-                //if (ptr_info.Pointer.is_allowzero == false) {
-                //    @compileError("ptr must be zeroable");
-                //}
                 const new_field = TypeInfo.StructField{
-                    .name = @typeName(comp_types[idx]),
-                    //.field_type = @Type(TypeInfo{ .Pointer = type_ptr }),
-                    //.field_type = @Type(ptr_info),
-                    .field_type = *comp_types[idx],
+                    .name = field.name,
+                    .field_type = *field.field_type,
                     .default_value = null,
                     .is_comptime = false,
                     .alignment = field.alignment,
@@ -69,8 +61,41 @@ pub fn typeFromBundleMut(comptime comp_types: anytype) type {
         .decls = &[_]TypeInfo.Declaration{},
         .is_tuple = false,
     };
-    const bundle_mut_info = TypeInfo{ .Struct = bundle_mut_data };
-    return @Type(bundle_mut_info);
+    const bundle_info = TypeInfo{ .Struct = bundle_mut_data };
+    return @Type(bundle_info);
+}
+
+test "type generation" {
+    const eql = std.mem.eql;
+    const allocator = std.testing.allocator;
+    const expect = std.testing.expect;
+
+    const Point = struct { x: u32, y: u32 };
+    const Velocity = struct { dir: u6, magnitude: u32 };
+    const HitPoints = struct { hp: u32 };
+
+    const p = Point{ .x = 1, .y = 2 };
+    const v = Velocity{ .dir = 7, .magnitude = 8 };
+
+    const bundle1 = .{ p, v };
+
+    // Create a basic Bundle
+    const Type1 = typeFromBundle(bundle1);
+    const info1 = @typeInfo(Type1);
+    const fields1 = info1.Struct.fields;
+    expect(eql(u8, fields1[0].name, "Point"));
+    expect(fields1[0].field_type == Point);
+    expect(eql(u8, fields1[1].name, "Velocity"));
+    expect(fields1[1].field_type == Velocity);
+
+    // Create a BundleMut from the basic Bundle
+    const MutType1 = makeBundleMut(Type1);
+    const mut_info1 = @typeInfo(MutType1);
+    const mut_fields1 = mut_info1.Struct.fields;
+    expect(eql(u8, mut_fields1[0].name, "Point"));
+    expect(mut_fields1[0].field_type == *Point);
+    expect(eql(u8, mut_fields1[1].name, "Velocity"));
+    expect(mut_fields1[1].field_type == *Velocity);
 }
 
 fn assertTupleOf(comptime ty: type, any: anytype) void {
