@@ -98,6 +98,33 @@ test "type generation" {
     expect(mut_fields1[1].field_type == *Velocity);
 }
 
+pub fn coerceToBundle(comptime T: type, comptime args: anytype) T {
+    var ret: T = .{};
+    inline for (args) |arg, idx| {
+        @field(ret, @typeName(@TypeOf(arg))) = arg;
+    }
+    return ret;
+}
+
+test "coercion test" {
+    const expect = std.testing.expect;
+
+    const Point = struct { x: u32, y: u32 };
+    const Velocity = struct { dir: u6, magnitude: u32 };
+
+    const p = Point{ .x = 1, .y = 2 };
+    const v = Velocity{ .dir = 7, .magnitude = 8 };
+    const bundle = .{ p, v };
+    const Bundle = typeFromBundle(bundle);
+
+    const new_bundle: Bundle = coerceToBundle(Bundle, bundle);
+
+    expect(new_bundle.Point.x == 1);
+    expect(new_bundle.Point.y == 2);
+    expect(new_bundle.Velocity.dir == 7);
+    expect(new_bundle.Velocity.magnitude == 8);
+}
+
 fn assertTupleOf(comptime ty: type, any: anytype) void {
     const info = @typeInfo(@TypeOf(any));
     if (info != .Struct or !info.Struct.is_tuple) {

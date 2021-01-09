@@ -3,24 +3,19 @@ const Allocator = std.mem.Allocator;
 const AutoHashMap = std.AutoHashMap;
 const ArrayList = std.ArrayList;
 
-const typeFromBundle = @import("./comptime_utils.zig").typeFromBundle;
+const comptime_utils = @import("./comptime_utils.zig");
 const arch_file = @import("./archetype.zig");
 const Archetype = arch_file.Archetype;
 const ArchetypeGen = arch_file.ArchetypeGen;
-
-fn coerceToBundle(comptime T: type, comptime args: anytype) T {
-    var ret: T = .{};
-    std.debug.print("point ret: {}\n", .{ret});
-    return ret;
-}
 
 const World = struct {
     const Self = @This();
     const DEFAULT_CAPACITY = 1024;
     const MaskType = u64;
+    const ArchetypeMap = AutoHashMap(MaskType, Archetype);
 
     allocator: *Allocator,
-    arch_map: AutoHashMap(MaskType, Archetype),
+    arch_map: ArchetypeMap,
     capacity: usize,
     mask_map: AutoHashMap([]const u8, MaskType),
 
@@ -34,7 +29,7 @@ const World = struct {
 
         return Self{
             .allocator = allocator,
-            .arch_map = AutoHashMap(MaskType, Archetype).init(allocator),
+            .arch_map = ArchetypeMap.init(allocator),
             .capacity = init_capacity,
             .mask_map = comp_map,
         };
@@ -43,10 +38,8 @@ const World = struct {
     fn deinit(self: *Self) void {
         // archetypes
         var it = self.arch_map.iterator();
-        var maybe_entry = it.next();
-        while (maybe_entry) |entry| {
+        while (it.next()) |entry| {
             entry.value.deinit();
-            maybe_entry = it.next();
         }
         // arch map
         self.arch_map.deinit();
@@ -55,34 +48,28 @@ const World = struct {
     }
 
     fn spawn(self: *Self, comptime args: anytype) !void {
-        const BundleType = typeFromBundle(args);
+        const BundleType = comptime_utils.typeFromBundle(args);
         // Create mask from component set
         const mask = self.getComponentMask(args);
-        const bundle = coerceToBundle(BundleType, args);
-        var maybe_arch = self.arch_map.get(mask);
-        if (maybe_arch) |arch| {
+        const bundle = comptime_utils.coerceToBundle(BundleType, args);
+        if (self.arch_map.get(mask)) |arch| {
             // TODO: get proper entity id
             arch.put(0, @ptrToInt(&bundle));
         } else {
-            // TODO: heap allocate this arch or the deinit routine segfaults
-            // Probably want to pass allocator to make function
-            // PREV
-            //var arch = try ArchetypeGen(BundleType).init(self.allocator);
-            //var dyn = Archetype.make(BundleType, &arch, self.allocator);
-            // NEW
             var dyn = try Archetype.make(BundleType, self.allocator);
             try self.arch_map.put(mask, dyn);
         }
     }
 
-    fn query(self: *Self, comptime args: anytype) void {
+    fn query(self: *Self, comptime args: anytype) Iterator {
         // Only take tuples as component bundles
         const type_info = @typeInfo(@TypeOf(args));
         if (type_info != .Struct or type_info.Struct.is_tuple != true) {
             @compileError("Expected tuple for components");
         }
 
-        const mask = self.getComponentMaskTypes(args);
+        const mask = self.getComponentMask(args);
+        return Iterator.init(self, mask);
     }
 
     fn getComponentMask(self: *Self, comptime component_tuple: anytype) MaskType {
@@ -106,9 +93,45 @@ const World = struct {
     }
 };
 
-const QueryIterator = struct {
-    fn next(self: *Self) void {
-        return;
+const Iterator = struct {
+    const Self = @This();
+    const IterType = World.ArchetypeMap.Iterator;
+
+    it: IterType,
+    arch: *Archetype,
+    arch_idx: usize,
+    cursor: usize,
+    mask: World.MaskType,
+
+    fn init(world: *World, mask: World.MaskType) Self {
+        var it = world.arch_map.iterator();
+
+        return .{
+            .it = world.arch_map.iterator(),
+            .arch = undefined,
+            .arch_idx = 0,
+            .cursor = 0,
+            .mask = mask,
+        };
+    }
+
+    fn next(self: *Self) bool {
+        // If we've reached the end of the current archetype's storage, move to
+        //  the next and reset the cursor
+        if (cursor == self.arch.len()) {
+            if (self.it.next()) |arch_ptr| {
+                self.arch = arch_ptr;
+            } else {
+                // Return false if we've finished query
+                return false;
+            }
+            self.cursor = 0;
+        }
+        return true;
+    }
+
+    fn get(self: *Self, T: type) T {
+        return arch.type_at(@typeName(T), self.cursor);
     }
 };
 
@@ -133,4 +156,24 @@ test "world test" {
     const mask = world.getComponentMask(.{ Point, Velocity });
     const mask2 = world.getComponentMask(.{ p, v });
     expect(mask == mask2);
+}
+
+test "query test" {
+    const allocator = std.testing.allocator;
+    const expect = std.testing.expect;
+
+    const CAPACITY = 1024;
+    const Point = struct { x: u32, y: u32 };
+    const Velocity = struct { dir: u6, magnitude: u32 };
+    const HitPoints = struct { hp: u32 };
+
+    const p: Point = .{ .x = 2, .y = 3 };
+    const v: Velocity = .{ .dir = 5, .magnitude = 6 };
+
+    var world = try World.init(allocator, CAPACITY, .{ Point, Velocity, HitPoints });
+    defer world.deinit();
+
+    var ent = world.spawn(.{p});
+
+    var query = world.query(.{Point});
 }

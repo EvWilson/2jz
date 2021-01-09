@@ -12,9 +12,9 @@ pub const Archetype = struct {
         deinit: fn (usize) void,
         get_idx: fn (usize, usize) usize,
         get_idx_mut: fn (usize, usize) usize,
+        len: fn (usize) usize,
         put: fn (usize, u32, usize) void,
-        print_at: fn (usize, usize) void,
-        print_info: fn (usize) void,
+        type_at: fn (usize, []const u8, usize) usize,
     };
     alloc: *Allocator,
     vtable: *const VTable,
@@ -32,16 +32,16 @@ pub const Archetype = struct {
         return self.vtable.get_idx_mut(self.object, idx);
     }
 
+    pub fn len(self: @This()) usize {
+        return self.vtable.len();
+    }
+
     pub fn put(self: @This(), id: u32, bundle_ptr: usize) void {
         self.vtable.put(self.object, id, bundle_ptr);
     }
 
-    pub fn print_at(self: @This(), idx: usize) void {
-        self.vtable.print_at(self.object, idx);
-    }
-
-    pub fn print_info(self: @This()) void {
-        self.vtable.print_info(self.object);
+    pub fn type_at(self: @This(), typename: []const u8, elem_idx: usize) usize {
+        self.vtable.type_at(self.object, type_idx, elem_idx);
     }
 
     pub fn make(comptime Bundle: type, alloc: *Allocator) !Self {
@@ -51,6 +51,7 @@ pub const Archetype = struct {
 
     fn makeInternal(comptime Bundle: type, alloc: *Allocator, arch: anytype) Self {
         const PtrType = @TypeOf(arch);
+        const bundle_info = @typeInfo(Bundle);
         return Self{
             .alloc = alloc,
             .vtable = &comptime VTable{
@@ -74,6 +75,12 @@ pub const Archetype = struct {
                         return @ptrToInt(ret_ptr);
                     }
                 }.get_idx_mut,
+                .len = struct {
+                    fn len(ptr: usize) usize {
+                        const self = @intToPtr(PtrType, ptr);
+                        return @call(.{ .modifier = .always_inline }, std.meta.Child(PtrType).len, .{self});
+                    }
+                }.len,
                 .put = struct {
                     fn put(ptr: usize, id: u32, bundle_ptr: usize) void {
                         const self = @intToPtr(PtrType, ptr);
@@ -81,18 +88,13 @@ pub const Archetype = struct {
                         @call(.{ .modifier = .always_inline }, std.meta.Child(PtrType).put, .{ self, id, bundle.* });
                     }
                 }.put,
-                .print_at = struct {
-                    fn print_at(ptr: usize, idx: usize) void {
+                .type_at = struct {
+                    fn type_at(ptr: usize, typename: []const u8, elem_idx: usize) usize {
                         const self = @intToPtr(PtrType, ptr);
-                        @call(.{ .modifier = .always_inline }, std.meta.Child(PtrType).print_at, .{ self, idx });
+                        const ret_ptr = @call(.{ .modifier = .always_inline }, std.meta.Child(PtrType).type_at, .{ self, typename, elem_idx });
+                        return ret_ptr;
                     }
-                }.print_at,
-                .print_info = struct {
-                    fn print_info(ptr: usize) void {
-                        const self = @intToPtr(PtrType, ptr);
-                        @call(.{ .modifier = .always_inline }, std.meta.Child(PtrType).print_info, .{self});
-                    }
-                }.print_info,
+                }.type_at,
             },
             .object = @ptrToInt(arch),
         };
@@ -170,6 +172,22 @@ pub fn ArchetypeGen(comptime Bundle: type) type {
     // return value
     const BundleMut = comptime_utils.makeBundleMut(Bundle);
 
+    const SizeCalc = struct {
+        fn offset(name: []const u8) u32 {
+            comptime var size = 0;
+            inline for (info.Struct.fields) |field, idx| {
+                if (std.mem.eql(u8, name, field.name)) {
+                    return size;
+                }
+                size += @sizeOf(@TypeOf(field.default_value.?));
+            }
+            // This should not be reached. If it is, it means the archetype was
+            //  passed a type name it does not contain
+            std.debug.assert(false);
+            return 0;
+        }
+    };
+
     return struct {
         const Self = @This();
         const DEFAULT_CAPACITY = 1024;
@@ -193,7 +211,7 @@ pub fn ArchetypeGen(comptime Bundle: type) type {
             result.entity_ids = try alloc.alloc(u32, Self.DEFAULT_CAPACITY);
             comptime var total_size = 0;
             inline for (info.Struct.fields) |field, idx| {
-                const size = @sizeOf(@TypeOf(field.default_value));
+                const size = @sizeOf(@TypeOf(field.default_value.?));
                 total_size += size;
             }
             result.bundle_size = total_size;
@@ -249,6 +267,12 @@ pub fn ArchetypeGen(comptime Bundle: type) type {
             return &result;
         }
 
+        fn type_at(self: *Self, typename: []const u8, elem_idx: usize) usize {
+            const offset = SizeCalc.offset(typename);
+            const elem_start = @ptrToInt(self.get_idx(elem_idx));
+            return elem_start + offset;
+        }
+
         fn get_idx_mut(self: *Self, idx: usize) *BundleMut {
             var struct_mem = self.type_mem;
             struct_mem.ptr += idx * self.bundle_size;
@@ -271,6 +295,10 @@ pub fn ArchetypeGen(comptime Bundle: type) type {
                 }
             }
             return false;
+        }
+
+        fn len(self: *Self) usize {
+            return self.cursor;
         }
 
         // TODO
@@ -339,6 +367,28 @@ test "archetype test" {
         total += arch.type_mem[i];
     }
     expect(total == 1);
+
+    // Get with type
+    // Point
+    const point_ptr: usize = arch.type_at(@typeName(Point), 0);
+    const point: *Point = @intToPtr(*Point, point_ptr);
+    expect(point.x == 1);
+    expect(point.y == 2);
+    point.x += 10;
+    expect(point.x == 11);
+    expect(point.y == 2);
+    // Check first 4 bytes of memory (Point x) to make sure it's unaffected
+    i = 0;
+    total = 0;
+    while (i < 4) : (i += 1) {
+        total += arch.type_mem[i];
+    }
+    expect(total == 1);
+    // Velocity
+    const vel_ptr: usize = arch.type_at(@typeName(Velocity), 0);
+    const vel: *Velocity = @intToPtr(*Velocity, vel_ptr);
+    expect(vel.dir == 3);
+    expect(vel.magnitude == 4);
 
     // `get` testing - mutable
     // Struct member mutations directly mutate underlying archetype memory
