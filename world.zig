@@ -46,7 +46,7 @@ const World = struct {
         };
     }
 
-    fn deinit(self: *Self) void {
+    pub fn deinit(self: *Self) void {
         // archetypes
         var it = self.arch_map.iterator();
         while (it.next()) |entry| {
@@ -59,12 +59,12 @@ const World = struct {
         self.entities.deinit();
     }
 
-    fn spawn(self: *Self, comptime args: anytype) !Entity {
+    pub fn spawn(self: *Self, comptime args: anytype) !Entity {
         const BundleType = comptime_utils.typeFromBundle(args);
         // Create mask from component set
         const mask = self.getComponentMask(args);
         const bundle = comptime_utils.coerceToBundle(BundleType, args);
-        const ent = self.entities.alloc(mask);
+        const ent = try self.entities.alloc(mask);
         if (self.arch_map.get(mask)) |arch| {
             arch.put(ent.id, @ptrToInt(&bundle));
         } else {
@@ -75,7 +75,7 @@ const World = struct {
         return ent;
     }
 
-    fn query(self: *Self, comptime args: anytype) ECSError!Iterator {
+    pub fn query(self: *Self, comptime args: anytype) ECSError!Iterator {
         // Only take tuples as component bundles
         const type_info = @typeInfo(@TypeOf(args));
         if (type_info != .Struct or type_info.Struct.is_tuple != true) {
@@ -85,7 +85,7 @@ const World = struct {
         return Iterator.init(self, mask);
     }
 
-    fn remove(self: *Self, entity: Entity) bool {
+    pub fn remove(self: *Self, entity: Entity) bool {
         var maybe_arch = self.arch_map.get(entity.location);
         if (maybe_arch) |arch| {
             return arch.remove(entity.id);
@@ -119,7 +119,6 @@ test "world test" {
     const allocator = std.testing.allocator;
     const expect = std.testing.expect;
 
-    const CAPACITY = 1024;
     const Point = struct { x: u32, y: u32 };
     const Velocity = struct { dir: u6, magnitude: u32 };
     const HitPoints = struct { hp: u32 };
@@ -185,7 +184,7 @@ const Iterator = struct {
         return true;
     }
 
-    fn get(self: *Self, comptime T: type) T {
+    pub fn get(self: *Self, comptime T: type) T {
         const type_ptr = self.arch.type_at(@typeName(T), self.cursor - 1);
         return @intToPtr(*T, type_ptr).*;
     }
@@ -195,7 +194,6 @@ test "query test" {
     const allocator = std.testing.allocator;
     const expect = std.testing.expect;
 
-    const CAPACITY = 1024;
     const Point = struct { x: u32, y: u32 };
     const Velocity = struct { dir: u6, magnitude: u32 };
     const HitPoints = struct { hp: u32 };
@@ -220,4 +218,16 @@ test "query test" {
         expect(point.x == cnt);
         expect(point.y == cnt);
     }
+}
+
+test "integration 1" {
+    const allocator = std.testing.allocator;
+    const expect = std.testing.expect;
+
+    const Point = struct { x: u32, y: u32 };
+    const Velocity = struct { dir: u6, magnitude: u32 };
+    const HitPoints = struct { hp: u32 };
+
+    var world = try World.init(allocator, .{ Point, Velocity, HitPoints });
+    defer world.deinit();
 }

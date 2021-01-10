@@ -1,6 +1,5 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const assert = std.debug.assert;
 
 const comptime_utils = @import("./comptime_utils.zig");
 const MaskType = comptime_utils.MaskType;
@@ -30,7 +29,7 @@ pub const Entities = struct {
         self.cursor = self.stack.len;
 
         var i: IdType = 0;
-        while (i < num) : (i += 1) {
+        while (i < self.capacity) : (i += 1) {
             self.stack[i] = i;
         }
 
@@ -42,12 +41,11 @@ pub const Entities = struct {
     }
 
     pub fn alloc(self: *Self, mask: MaskType) !Entity {
-        // TODO: grow on empty
         if (self.cursor == 0) {
             try self.grow();
         }
         self.cursor -= 1;
-        return .{
+        return Entity{
             .id = self.stack[self.cursor],
             .location = mask,
         };
@@ -61,12 +59,30 @@ pub const Entities = struct {
     fn grow(self: *Self) !void {
         const new_cap = self.capacity * 2;
         self.stack = try self.allocator.realloc(self.stack, new_cap);
-
+        var stack_idx: IdType = 0;
+        while (stack_idx < self.capacity) : (stack_idx += 1) {
+            // This int cast shouldn't realistically cause an issue, given that
+            //  the capacity is unlikely to meaningfully exceed the bit width of
+            //  the id type.
+            const cursor_val = @intCast(IdType, self.capacity);
+            self.stack[stack_idx] = stack_idx + cursor_val;
+        }
+        self.cursor = self.capacity;
         self.capacity = new_cap;
+    }
+
+    fn print(self: *Self) void {
+        std.debug.print("cursor: {}, capacity: {}, contents: ", .{ self.cursor, self.capacity });
+        var i: usize = 0;
+        while (i < self.capacity) : (i += 1) {
+            std.debug.print("{} ", .{self.stack[i]});
+        }
+        std.debug.print("\n", .{});
     }
 };
 
-test "entities test" {
+// Basic entity manager test
+test "basic" {
     const test_allocator = std.testing.allocator;
     const expect = std.testing.expect;
     const ArrayList = std.ArrayList;
@@ -79,14 +95,12 @@ test "entities test" {
     {
         var old_cursor = entities.cursor;
 
-        // Not explicitly testing entity id value, as the plan is eventually to
-        // have the behavior be a deterministic stack layout
-        var ent = entities.alloc(1);
-        assert(old_cursor == entities.cursor + 1);
-        assert(ent.id >= 0 and ent.id < ENTITY_TOTAL);
+        var ent = try entities.alloc(1);
+        expect(old_cursor == entities.cursor + 1);
+        expect(ent.id >= 0 and ent.id < ENTITY_TOTAL);
 
         entities.free(ent);
-        assert(old_cursor == entities.cursor);
+        expect(old_cursor == entities.cursor);
     }
 
     {
@@ -95,16 +109,63 @@ test "entities test" {
 
         var ct: usize = ENTITY_TOTAL;
         while (ct > 0) : (ct -= 1) {
-            try entity_holder.append(entities.alloc(1));
+            try entity_holder.append(try entities.alloc(1));
         }
-        assert(entities.cursor == 0);
+        expect(entities.cursor == 0);
 
         ct = entity_holder.items.len;
         while (ct > 0) : (ct -= 1) {
             var ent = entity_holder.pop();
-            assert(ent.id >= 0 and ent.id < ENTITY_TOTAL);
+            expect(ent.id >= 0 and ent.id < ENTITY_TOTAL);
             entities.free(ent);
         }
-        assert(entities.cursor == ENTITY_TOTAL);
+        expect(entities.cursor == ENTITY_TOTAL);
+    }
+}
+
+// Ensure that entity storage is able to grow and behaves as expected
+test "storage resizing" {
+    const test_allocator = std.testing.allocator;
+    const expect = std.testing.expect;
+    const ArrayList = std.ArrayList;
+
+    var entities = try Entities.init_capacity(test_allocator, 1);
+    defer entities.deinit();
+    var ids = ArrayList(IdType).init(test_allocator);
+    defer ids.deinit();
+
+    // Alloc'd: 1, cap: 1
+    const ent = try entities.alloc(1);
+    expect(entities.capacity == 1);
+    try ids.append(ent.id);
+    expect(ent.id == 0);
+    expect(ent.location == 1);
+    // Alloc'd: 2, cap: 1 -> 2
+    const ent2 = try entities.alloc(1);
+    expect(entities.capacity == 2);
+    try ids.append(ent2.id);
+    expect(ent2.location == 1);
+    // Alloc'd: 3, cap: 2 -> 4
+    const ent3 = try entities.alloc(1);
+    expect(entities.capacity == 4);
+    try ids.append(ent3.id);
+    expect(ent3.location == 1);
+    // Alloc'd: 4, cap: 4
+    const ent4 = try entities.alloc(1);
+    expect(entities.capacity == 4);
+    try ids.append(ent4.id);
+    expect(ent4.location == 1);
+    // Alloc'd: 5, cap: 4 -> 8
+    const ent5 = try entities.alloc(1);
+    expect(entities.capacity == 8);
+    expect(ent4.location == 1);
+
+    // Makes sure all received entity id's are what we're expecting
+    var id_values = [_]usize{ 1, 1, 1, 1 };
+    for (ids.items) |id| {
+        id_values[id] = 0;
+    }
+    for (id_values) |value| {
+        expect(value == 0);
     }
 }
