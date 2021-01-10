@@ -4,6 +4,8 @@ const ArrayList = std.ArrayList;
 const TypeInfo = std.builtin.TypeInfo;
 
 const comptime_utils = @import("./comptime_utils.zig");
+const MaskType = comptime_utils.MaskType;
+const IdType = comptime_utils.IdType;
 
 // Inspired by Alex Naskos' Runtime Polymorphism talk, 14:53
 pub const Archetype = struct {
@@ -13,7 +15,8 @@ pub const Archetype = struct {
         get_idx: fn (usize, usize) usize,
         get_idx_mut: fn (usize, usize) usize,
         cursor: fn (usize) usize,
-        put: fn (usize, u32, usize) void,
+        put: fn (usize, IdType, usize) void,
+        remove: fn (usize, IdType) bool,
         type_at: fn (usize, []const u8, usize) usize,
 
         print_at: fn (usize, usize) void,
@@ -38,8 +41,12 @@ pub const Archetype = struct {
         return self.vtable.cursor(self.object);
     }
 
-    pub fn put(self: @This(), id: u32, bundle_ptr: usize) void {
+    pub fn put(self: @This(), id: IdType, bundle_ptr: usize) void {
         self.vtable.put(self.object, id, bundle_ptr);
+    }
+
+    pub fn remove(self: @This(), id: IdType) bool {
+        return self.vtable.remove(self.object, id);
     }
 
     pub fn type_at(self: @This(), typename: []const u8, elem_idx: usize) usize {
@@ -88,12 +95,18 @@ pub const Archetype = struct {
                     }
                 }.cursor,
                 .put = struct {
-                    fn put(ptr: usize, id: u32, bundle_ptr: usize) void {
+                    fn put(ptr: usize, id: IdType, bundle_ptr: usize) void {
                         const self = @intToPtr(PtrType, ptr);
                         const bundle: *Bundle = @intToPtr(*Bundle, bundle_ptr);
                         @call(.{ .modifier = .always_inline }, std.meta.Child(PtrType).put, .{ self, id, bundle.* });
                     }
                 }.put,
+                .remove = struct {
+                    fn remove(ptr: usize, id: IdType) bool {
+                        const self = @intToPtr(PtrType, ptr);
+                        return @call(.{ .modifier = .always_inline }, std.meta.Child(PtrType).remove, .{ self, id });
+                    }
+                }.remove,
                 .type_at = struct {
                     fn type_at(ptr: usize, typename: []const u8, elem_idx: usize) usize {
                         const self = @intToPtr(PtrType, ptr);
@@ -212,16 +225,16 @@ pub fn ArchetypeGen(comptime Bundle: type) type {
         capacity: u32,
         // Points to next available mem for bundles
         cursor: u32,
-        entity_ids: []u32,
+        entity_ids: []MaskType,
         // Memory to hold data
         type_mem: []u8,
 
-        pub fn init(alloc: *Allocator) !*Self {
+        fn init(alloc: *Allocator) !*Self {
             var result: *Self = try alloc.create(Self);
             result.allocator = alloc;
             result.capacity = Self.DEFAULT_CAPACITY;
             result.cursor = 0;
-            result.entity_ids = try alloc.alloc(u32, Self.DEFAULT_CAPACITY);
+            result.entity_ids = try alloc.alloc(MaskType, Self.DEFAULT_CAPACITY);
             comptime var total_size = 0;
             inline for (info.Struct.fields) |field, idx| {
                 const size = @sizeOf(@TypeOf(field.default_value.?));
@@ -232,17 +245,13 @@ pub fn ArchetypeGen(comptime Bundle: type) type {
             return result;
         }
 
-        pub fn deinit(self: *Self) void {
+        fn deinit(self: *Self) void {
             self.allocator.free(self.entity_ids);
             self.allocator.free(self.type_mem);
             self.allocator.destroy(self);
         }
 
-        fn print_info(self: *Self) void {
-            std.debug.print("capacity: {}, cursor: {}, bundle size: {}\n", .{ self.capacity, self.cursor, self.bundle_size });
-        }
-
-        fn put(self: *Self, id: u32, bundle: Bundle) void {
+        fn put(self: *Self, id: IdType, bundle: Bundle) void {
             if (self.cursor == self.capacity) {
                 std.debug.print("cursor ({}) met capacity({}). GROWING MEM REGION.\n", .{ self.cursor, self.capacity });
                 self.grow();
@@ -298,6 +307,29 @@ pub fn ArchetypeGen(comptime Bundle: type) type {
             return &result;
         }
 
+        fn remove(self: *Self, id: IdType) bool {
+            var idx: usize = 0;
+            while (idx != self.cursor + 1) : (idx += 1) {
+                if (self.entity_ids[idx] == id) {
+                    self.remove_idx(idx);
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        fn remove_idx(self: *Self, idx: usize) void {
+            var dest_slice: []u8 = self.type_mem;
+            dest_slice.ptr += idx * self.bundle_size;
+            dest_slice.len = self.bundle_size;
+            var src_slice: []u8 = self.type_mem;
+            src_slice.ptr += self.cursor * self.bundle_size;
+            src_slice.len = self.bundle_size;
+            std.mem.copy(u8, dest_slice, src_slice);
+            self.entity_ids[idx] = self.entity_ids[self.cursor];
+            self.cursor -= 1;
+        }
+
         fn has(self: *Self, comptime comp_type: type) bool {
             const other = @typeName(comp_type);
             inline for (info.Struct.fields) |field| {
@@ -318,6 +350,7 @@ pub fn ArchetypeGen(comptime Bundle: type) type {
             std.debug.assert(false);
         }
 
+        // Diagnostic functions section
         fn print_at(self: *Self, idx: usize) void {
             std.debug.print("arch type mem @[{}]: ", .{idx});
             var i: usize = 0;
@@ -327,12 +360,8 @@ pub fn ArchetypeGen(comptime Bundle: type) type {
             std.debug.print("\n", .{});
         }
 
-        fn get_bundle() type {
-            return Bundle;
-        }
-
-        fn get_bundle_mut() type {
-            return BundleMut;
+        fn print_info(self: *Self) void {
+            std.debug.print("capacity: {}, cursor: {}, bundle size: {}\n", .{ self.capacity, self.cursor, self.bundle_size });
         }
     };
 }

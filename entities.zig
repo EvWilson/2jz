@@ -2,62 +2,78 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 
-const Entities = struct {
+const comptime_utils = @import("./comptime_utils.zig");
+const MaskType = comptime_utils.MaskType;
+const IdType = comptime_utils.IdType;
+
+pub const Entity = struct {
+    id: IdType,
+    location: MaskType,
+};
+
+pub const Entities = struct {
     const Self = @This();
 
     allocator: *Allocator,
-    stack: []Entity,
+    capacity: usize,
+    stack: []IdType,
     cursor: usize,
 
-    fn initCapacity(allocator: *Allocator, num: usize) !Self {
+    pub fn init_capacity(allocator: *Allocator, capacity: usize) !Self {
         var self = Self{
             .allocator = allocator,
-            .stack = &[_]Entity{},
+            .capacity = capacity,
+            .stack = &[_]IdType{},
             .cursor = 0,
         };
-        self.stack = try allocator.alloc(Entity, num);
+        self.stack = try allocator.alloc(IdType, self.capacity);
         self.cursor = self.stack.len;
 
-        var i: u32 = 0;
+        var i: IdType = 0;
         while (i < num) : (i += 1) {
-            self.stack[i].id = i;
+            self.stack[i] = i;
         }
 
         return self;
     }
 
-    fn deinit(self: *Self) void {
-        self.allocator.free(self.stack.ptr[0..self.stack.len]);
+    pub fn deinit(self: *Self) void {
+        self.allocator.free(self.stack);
     }
 
-    fn alloc(self: *Self) Entity {
-        assert(self.cursor > 0);
+    pub fn alloc(self: *Self, mask: MaskType) !Entity {
+        // TODO: grow on empty
+        if (self.cursor == 0) {
+            try self.grow();
+        }
         self.cursor -= 1;
-        return Entity{
-            .id = self.stack[self.cursor].id,
+        return .{
+            .id = self.stack[self.cursor],
+            .location = mask,
         };
     }
 
-    fn free(self: *Self, entity: Entity) void {
-        assert(self.cursor < self.stack.len);
+    pub fn free(self: *Self, entity: Entity) void {
         defer self.cursor += 1;
-        self.stack[self.cursor].id = entity.id;
+        self.stack[self.cursor] = entity.id;
     }
-};
 
-const Entity = struct {
-    id: u32,
+    fn grow(self: *Self) !void {
+        const new_cap = self.capacity * 2;
+        self.stack = try self.allocator.realloc(self.stack, new_cap);
+
+        self.capacity = new_cap;
+    }
 };
 
 test "entities test" {
     const test_allocator = std.testing.allocator;
-    const print = std.debug.print;
     const expect = std.testing.expect;
     const ArrayList = std.ArrayList;
 
     const ENTITY_TOTAL = 1024;
 
-    var entities = try Entities.initCapacity(test_allocator, ENTITY_TOTAL);
+    var entities = try Entities.init_capacity(test_allocator, ENTITY_TOTAL);
     defer entities.deinit();
 
     {
@@ -65,7 +81,7 @@ test "entities test" {
 
         // Not explicitly testing entity id value, as the plan is eventually to
         // have the behavior be a deterministic stack layout
-        var ent = entities.alloc();
+        var ent = entities.alloc(1);
         assert(old_cursor == entities.cursor + 1);
         assert(ent.id >= 0 and ent.id < ENTITY_TOTAL);
 
@@ -79,7 +95,7 @@ test "entities test" {
 
         var ct: usize = ENTITY_TOTAL;
         while (ct > 0) : (ct -= 1) {
-            try entity_holder.append(entities.alloc());
+            try entity_holder.append(entities.alloc(1));
         }
         assert(entities.cursor == 0);
 

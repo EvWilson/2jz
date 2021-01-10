@@ -4,24 +4,32 @@ const AutoHashMap = std.AutoHashMap;
 const ArrayList = std.ArrayList;
 
 const comptime_utils = @import("./comptime_utils.zig");
+const MaskType = comptime_utils.MaskType;
 const arch_file = @import("./archetype.zig");
 const Archetype = arch_file.Archetype;
 const ArchetypeGen = arch_file.ArchetypeGen;
+const ent_file = @import("./entities.zig");
+const Entity = ent_file.Entity;
+const Entities = ent_file.Entities;
 
-const ECSError = error{InvalidIterator};
+const ECSError = error{ InvalidIterator, NoSuchEntity };
 
 const World = struct {
     const Self = @This();
     const DEFAULT_CAPACITY = 1024;
-    const MaskType = u64;
     const ArchetypeMap = AutoHashMap(MaskType, Archetype);
 
     allocator: *Allocator,
     arch_map: ArchetypeMap,
     capacity: usize,
     mask_map: AutoHashMap([]const u8, MaskType),
+    entities: Entities,
 
-    pub fn init(allocator: *Allocator, init_capacity: usize, comptime registry: anytype) !Self {
+    pub fn init(allocator: *Allocator, comptime registry: anytype) !Self {
+        return Self.init_capacity(allocator, Self.DEFAULT_CAPACITY, registry);
+    }
+
+    pub fn init_capacity(allocator: *Allocator, capacity: usize, comptime registry: anytype) !Self {
         var comp_map = AutoHashMap([]const u8, MaskType).init(allocator);
         comptime var mask_val = 1;
         inline for (registry) |ty| {
@@ -32,8 +40,9 @@ const World = struct {
         return Self{
             .allocator = allocator,
             .arch_map = ArchetypeMap.init(allocator),
-            .capacity = init_capacity,
+            .capacity = capacity,
             .mask_map = comp_map,
+            .entities = try Entities.init_capacity(allocator, Self.DEFAULT_CAPACITY),
         };
     }
 
@@ -47,21 +56,23 @@ const World = struct {
         self.arch_map.deinit();
         // component map
         self.mask_map.deinit();
+        self.entities.deinit();
     }
 
-    fn spawn(self: *Self, comptime args: anytype) !void {
+    fn spawn(self: *Self, comptime args: anytype) !Entity {
         const BundleType = comptime_utils.typeFromBundle(args);
         // Create mask from component set
         const mask = self.getComponentMask(args);
         const bundle = comptime_utils.coerceToBundle(BundleType, args);
+        const ent = self.entities.alloc(mask);
         if (self.arch_map.get(mask)) |arch| {
-            // TODO: get proper entity id
-            arch.put(0, @ptrToInt(&bundle));
+            arch.put(ent.id, @ptrToInt(&bundle));
         } else {
             var dyn = try Archetype.make(BundleType, self.allocator);
-            dyn.put(0, @ptrToInt(&bundle));
+            dyn.put(ent.id, @ptrToInt(&bundle));
             try self.arch_map.put(mask, dyn);
         }
+        return ent;
     }
 
     fn query(self: *Self, comptime args: anytype) ECSError!Iterator {
@@ -70,9 +81,17 @@ const World = struct {
         if (type_info != .Struct or type_info.Struct.is_tuple != true) {
             @compileError("Expected tuple for components");
         }
-
         const mask = self.getComponentMask(args);
         return Iterator.init(self, mask);
+    }
+
+    fn remove(self: *Self, entity: Entity) bool {
+        var maybe_arch = self.arch_map.get(entity.location);
+        if (maybe_arch) |arch| {
+            return arch.remove(entity.id);
+        } else {
+            return false;
+        }
     }
 
     fn getComponentMask(self: *Self, comptime component_tuple: anytype) MaskType {
@@ -108,15 +127,19 @@ test "world test" {
     const p: Point = .{ .x = 2, .y = 3 };
     const v: Velocity = .{ .dir = 5, .magnitude = 6 };
 
-    var world = try World.init(allocator, CAPACITY, .{ Point, Velocity, HitPoints });
+    var world = try World.init(allocator, .{ Point, Velocity, HitPoints });
     defer world.deinit();
 
-    var ent = world.spawn(.{p});
-    var ent2 = world.spawn(.{Point{ .x = 3, .y = 4 }});
+    var ent = try world.spawn(.{p});
+    var ent2 = try world.spawn(.{Point{ .x = 3, .y = 4 }});
 
     const mask = world.getComponentMask(.{ Point, Velocity });
     const mask2 = world.getComponentMask(.{ p, v });
     expect(mask == mask2);
+
+    const old_cursor = world.arch_map.get(world.getComponentMask(.{p})).?.cursor();
+    expect(world.remove(ent));
+    expect(world.arch_map.get(world.getComponentMask(.{p})).?.cursor() == old_cursor - 1);
 }
 
 const Iterator = struct {
@@ -126,9 +149,9 @@ const Iterator = struct {
     it: IterType,
     arch: *Archetype,
     cursor: usize,
-    mask: World.MaskType,
+    mask: MaskType,
 
-    fn init(world: *World, mask: World.MaskType) ECSError!Self {
+    fn init(world: *World, mask: MaskType) ECSError!Self {
         var it = world.arch_map.iterator();
         const maybe_entry = it.next();
         var entry: *World.ArchetypeMap.Entry = undefined;
@@ -182,7 +205,7 @@ test "query test" {
     const p3: Point = .{ .x = 3, .y = 3 };
     const v: Velocity = .{ .dir = 5, .magnitude = 6 };
 
-    var world = try World.init(allocator, CAPACITY, .{ Point, Velocity, HitPoints });
+    var world = try World.init(allocator, .{ Point, Velocity, HitPoints });
     defer world.deinit();
 
     var ent1 = world.spawn(.{p1});

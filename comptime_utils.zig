@@ -1,6 +1,9 @@
 const std = @import("std");
 const TypeInfo = std.builtin.TypeInfo;
 
+pub const MaskType = u64;
+pub const IdType = u32;
+
 pub fn typeFromBundle(comptime comp_types: anytype) type {
     const info = @typeInfo(@TypeOf(comp_types));
     const field_len = info.Struct.fields.len;
