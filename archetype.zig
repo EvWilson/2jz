@@ -12,9 +12,11 @@ pub const Archetype = struct {
         deinit: fn (usize) void,
         get_idx: fn (usize, usize) usize,
         get_idx_mut: fn (usize, usize) usize,
-        len: fn (usize) usize,
+        cursor: fn (usize) usize,
         put: fn (usize, u32, usize) void,
         type_at: fn (usize, []const u8, usize) usize,
+
+        print_at: fn (usize, usize) void,
     };
     alloc: *Allocator,
     vtable: *const VTable,
@@ -32,8 +34,8 @@ pub const Archetype = struct {
         return self.vtable.get_idx_mut(self.object, idx);
     }
 
-    pub fn len(self: @This()) usize {
-        return self.vtable.len();
+    pub fn cursor(self: @This()) usize {
+        return self.vtable.cursor(self.object);
     }
 
     pub fn put(self: @This(), id: u32, bundle_ptr: usize) void {
@@ -41,12 +43,16 @@ pub const Archetype = struct {
     }
 
     pub fn type_at(self: @This(), typename: []const u8, elem_idx: usize) usize {
-        self.vtable.type_at(self.object, type_idx, elem_idx);
+        return self.vtable.type_at(self.object, typename, elem_idx);
     }
 
     pub fn make(comptime Bundle: type, alloc: *Allocator) !Self {
         const arch = try ArchetypeGen(Bundle).init(alloc);
         return makeInternal(Bundle, alloc, arch);
+    }
+
+    pub fn print_at(self: @This(), idx: usize) void {
+        self.vtable.print_at(self.object, idx);
     }
 
     fn makeInternal(comptime Bundle: type, alloc: *Allocator, arch: anytype) Self {
@@ -75,12 +81,12 @@ pub const Archetype = struct {
                         return @ptrToInt(ret_ptr);
                     }
                 }.get_idx_mut,
-                .len = struct {
-                    fn len(ptr: usize) usize {
+                .cursor = struct {
+                    fn cursor(ptr: usize) usize {
                         const self = @intToPtr(PtrType, ptr);
-                        return @call(.{ .modifier = .always_inline }, std.meta.Child(PtrType).len, .{self});
+                        return @call(.{ .modifier = .always_inline }, std.meta.Child(PtrType).cursor, .{self});
                     }
-                }.len,
+                }.cursor,
                 .put = struct {
                     fn put(ptr: usize, id: u32, bundle_ptr: usize) void {
                         const self = @intToPtr(PtrType, ptr);
@@ -95,6 +101,13 @@ pub const Archetype = struct {
                         return ret_ptr;
                     }
                 }.type_at,
+
+                .print_at = struct {
+                    fn print_at(ptr: usize, idx: usize) void {
+                        const self = @intToPtr(PtrType, ptr);
+                        @call(.{ .modifier = .always_inline }, std.meta.Child(PtrType).print_at, .{ self, idx });
+                    }
+                }.print_at,
             },
             .object = @ptrToInt(arch),
         };
@@ -236,15 +249,13 @@ pub fn ArchetypeGen(comptime Bundle: type) type {
             }
             comptime var offset = 0;
             const field_info = @typeInfo(@TypeOf(bundle));
+            var dest_slice = self.type_mem;
+            dest_slice.ptr += self.cursor * self.bundle_size;
 
             inline for (field_info.Struct.fields) |field, idx| {
                 const field_bytes = std.mem.asBytes(&@field(bundle, field.name));
-
-                var dest_slice = self.type_mem;
-                dest_slice.ptr += (self.cursor * self.bundle_size) + offset;
                 std.mem.copy(u8, dest_slice, field_bytes);
-
-                offset += field_bytes.len;
+                dest_slice.ptr += field_bytes.len;
             }
             self.entity_ids[self.cursor] = id;
             self.cursor += 1;
@@ -297,7 +308,7 @@ pub fn ArchetypeGen(comptime Bundle: type) type {
             return false;
         }
 
-        fn len(self: *Self) usize {
+        fn cursor(self: *Self) usize {
             return self.cursor;
         }
 
@@ -308,10 +319,10 @@ pub fn ArchetypeGen(comptime Bundle: type) type {
         }
 
         fn print_at(self: *Self, idx: usize) void {
-            std.debug.print("arch type mem: ", .{});
+            std.debug.print("arch type mem @[{}]: ", .{idx});
             var i: usize = 0;
             while (i < self.bundle_size) : (i += 1) {
-                std.debug.print("{} ", .{self.type_mem[i]});
+                std.debug.print("{} ", .{self.type_mem[idx * self.bundle_size + i]});
             }
             std.debug.print("\n", .{});
         }

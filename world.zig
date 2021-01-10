@@ -8,6 +8,8 @@ const arch_file = @import("./archetype.zig");
 const Archetype = arch_file.Archetype;
 const ArchetypeGen = arch_file.ArchetypeGen;
 
+const ECSError = error{InvalidIterator};
+
 const World = struct {
     const Self = @This();
     const DEFAULT_CAPACITY = 1024;
@@ -57,11 +59,12 @@ const World = struct {
             arch.put(0, @ptrToInt(&bundle));
         } else {
             var dyn = try Archetype.make(BundleType, self.allocator);
+            dyn.put(0, @ptrToInt(&bundle));
             try self.arch_map.put(mask, dyn);
         }
     }
 
-    fn query(self: *Self, comptime args: anytype) Iterator {
+    fn query(self: *Self, comptime args: anytype) ECSError!Iterator {
         // Only take tuples as component bundles
         const type_info = @typeInfo(@TypeOf(args));
         if (type_info != .Struct or type_info.Struct.is_tuple != true) {
@@ -93,48 +96,6 @@ const World = struct {
     }
 };
 
-const Iterator = struct {
-    const Self = @This();
-    const IterType = World.ArchetypeMap.Iterator;
-
-    it: IterType,
-    arch: *Archetype,
-    arch_idx: usize,
-    cursor: usize,
-    mask: World.MaskType,
-
-    fn init(world: *World, mask: World.MaskType) Self {
-        var it = world.arch_map.iterator();
-
-        return .{
-            .it = world.arch_map.iterator(),
-            .arch = undefined,
-            .arch_idx = 0,
-            .cursor = 0,
-            .mask = mask,
-        };
-    }
-
-    fn next(self: *Self) bool {
-        // If we've reached the end of the current archetype's storage, move to
-        //  the next and reset the cursor
-        if (cursor == self.arch.len()) {
-            if (self.it.next()) |arch_ptr| {
-                self.arch = arch_ptr;
-            } else {
-                // Return false if we've finished query
-                return false;
-            }
-            self.cursor = 0;
-        }
-        return true;
-    }
-
-    fn get(self: *Self, T: type) T {
-        return arch.type_at(@typeName(T), self.cursor);
-    }
-};
-
 test "world test" {
     const allocator = std.testing.allocator;
     const expect = std.testing.expect;
@@ -158,6 +119,55 @@ test "world test" {
     expect(mask == mask2);
 }
 
+const Iterator = struct {
+    const Self = @This();
+    const IterType = World.ArchetypeMap.Iterator;
+
+    it: IterType,
+    arch: *Archetype,
+    cursor: usize,
+    mask: World.MaskType,
+
+    fn init(world: *World, mask: World.MaskType) ECSError!Self {
+        var it = world.arch_map.iterator();
+        const maybe_entry = it.next();
+        var entry: *World.ArchetypeMap.Entry = undefined;
+        if (maybe_entry) |entry_ref| {
+            entry = entry_ref;
+        } else {
+            return ECSError.InvalidIterator;
+        }
+        return Self{
+            .it = it,
+            .arch = &entry.value,
+            .cursor = 0,
+            .mask = mask,
+        };
+    }
+
+    fn next(self: *Self) bool {
+        // If we've reached the end of the current archetype's storage, move to
+        //  the next and reset the cursor
+        if (self.cursor == self.arch.cursor()) {
+            if (self.it.next()) |entry_ptr| {
+                self.arch = &entry_ptr.value;
+            } else {
+                // Return false if we've finished query
+                return false;
+            }
+            self.cursor = 0;
+        } else {
+            self.cursor += 1;
+        }
+        return true;
+    }
+
+    fn get(self: *Self, comptime T: type) T {
+        const type_ptr = self.arch.type_at(@typeName(T), self.cursor - 1);
+        return @intToPtr(*T, type_ptr).*;
+    }
+};
+
 test "query test" {
     const allocator = std.testing.allocator;
     const expect = std.testing.expect;
@@ -167,13 +177,24 @@ test "query test" {
     const Velocity = struct { dir: u6, magnitude: u32 };
     const HitPoints = struct { hp: u32 };
 
-    const p: Point = .{ .x = 2, .y = 3 };
+    const p1: Point = .{ .x = 1, .y = 1 };
+    const p2: Point = .{ .x = 2, .y = 2 };
+    const p3: Point = .{ .x = 3, .y = 3 };
     const v: Velocity = .{ .dir = 5, .magnitude = 6 };
 
     var world = try World.init(allocator, CAPACITY, .{ Point, Velocity, HitPoints });
     defer world.deinit();
 
-    var ent = world.spawn(.{p});
+    var ent1 = world.spawn(.{p1});
+    var ent2 = world.spawn(.{p2});
+    var ent3 = world.spawn(.{p3});
 
-    var query = world.query(.{Point});
+    var query = try world.query(.{Point});
+    var cnt: usize = 0;
+    while (query.next()) {
+        cnt += 1;
+        const point: Point = query.get(Point);
+        expect(point.x == cnt);
+        expect(point.y == cnt);
+    }
 }

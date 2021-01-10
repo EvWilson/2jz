@@ -156,3 +156,10 @@ test "ptr as int" {
     const p: Point = .{ .x = 12, .y = 34 };
     print_address(@ptrToInt(&p));
 }
+
+test "optionals?" {
+    var opt_foo: ?u32 = 5;
+    if (opt_foo) |foo| {
+        std.debug.print("optional type: {}\n", .{@typeName(@TypeOf(foo))});
+    }
+}
