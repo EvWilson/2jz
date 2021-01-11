@@ -5,11 +5,15 @@ const comptime_utils = @import("./comptime_utils.zig");
 const MaskType = comptime_utils.MaskType;
 const IdType = comptime_utils.IdType;
 
+// Used for basic bookkeeping
+// Location is the bitmask of the archetype that holds this entity
 pub const Entity = struct {
     id: IdType,
     location: MaskType,
 };
 
+// The entity manager
+// Responsible for allocating entity ids
 pub const Entities = struct {
     const Self = @This();
 
@@ -71,6 +75,7 @@ pub const Entities = struct {
         self.capacity = new_cap;
     }
 
+    // Diagnostic methods section
     fn print(self: *Self) void {
         std.debug.print("cursor: {}, capacity: {}, contents: ", .{ self.cursor, self.capacity });
         var i: usize = 0;

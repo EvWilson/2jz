@@ -9,7 +9,7 @@ const IdType = comptime_utils.IdType;
 
 // Inspired by Alex Naskos' Runtime Polymorphism talk, 14:53
 // This is entirely a proxy object for types returned by ArchetypeGen below,
-// used to provide an interface over the produced generics.
+// used to provide an interface over the produced structs.
 // For archetype's operation, see ArchetypeGen.
 pub const Archetype = struct {
     const Self = @This();
@@ -63,12 +63,12 @@ pub const Archetype = struct {
     // This function and the one below are what set up the dynamic reference to
     // the type returned by ArchetypeGen, including putting together the
     // function pointers for the vtable
-    pub fn make(comptime Bundle: type, mask_val: MaskType, alloc: *Allocator) !Self {
-        const arch = try ArchetypeGen(Bundle).init(mask_val, alloc);
-        return makeInternal(Bundle, alloc, arch);
+    pub fn make(comptime Bundle: type, mask_val: MaskType, alloc: *Allocator, capacity: usize) !Self {
+        const arch = try ArchetypeGen(Bundle).initCapacity(mask_val, alloc, capacity);
+        return makeInternal(Bundle, alloc, capacity, arch);
     }
 
-    fn makeInternal(comptime Bundle: type, alloc: *Allocator, arch: anytype) Self {
+    fn makeInternal(comptime Bundle: type, alloc: *Allocator, capacity: usize, arch: anytype) Self {
         const PtrType = @TypeOf(arch);
         const bundle_info = @typeInfo(Bundle);
         return Self{
@@ -145,10 +145,10 @@ test "vtable" {
     const v = Velocity{ .dir = 7, .magnitude = 8 };
     const types = .{ Point, Velocity };
     const Bundle = comptime_utils.typeFromBundle(.{ Point, Velocity });
-    var arch = try ArchetypeGen(Bundle).init(1, allocator);
+    var arch = try ArchetypeGen(Bundle).initCapacity(1, allocator, 1024);
 
     // Set up the dynamic reference
-    var dyn = Archetype.makeInternal(Bundle, allocator, arch);
+    var dyn = Archetype.makeInternal(Bundle, allocator, 1024, arch);
     defer dyn.deinit();
 
     // `mask`
@@ -208,7 +208,7 @@ pub fn ArchetypeGen(comptime Bundle: type) type {
         // Total size of all structs in the arch
         bundle_size: u32,
         // Number of bundles arch can currently hold
-        capacity: u32,
+        capacity: usize,
         // Points to next available mem for bundles
         cursor: u32,
         entities: []IdType,
@@ -216,16 +216,12 @@ pub fn ArchetypeGen(comptime Bundle: type) type {
         // Memory to hold data
         type_mem: []u8,
 
-        fn init(mask_val: MaskType, alloc: *Allocator) !*Self {
-            return Self.initCapacity(mask_val, alloc, Self.DEFAULT_CAPACITY);
-        }
-
-        fn initCapacity(mask_val: MaskType, alloc: *Allocator, capacity: u32) !*Self {
+        fn initCapacity(mask_val: MaskType, alloc: *Allocator, capacity: usize) !*Self {
             var result: *Self = try alloc.create(Self);
             result.allocator = alloc;
             result.capacity = capacity;
             result.cursor = 0;
-            result.entities = try alloc.alloc(IdType, Self.DEFAULT_CAPACITY);
+            result.entities = try alloc.alloc(IdType, capacity);
             result.mask = mask_val;
             comptime var total_size = 0;
             inline for (info.Struct.fields) |field, idx| {
@@ -263,16 +259,21 @@ pub fn ArchetypeGen(comptime Bundle: type) type {
             return true;
         }
 
+        // Returns the address of the piece of data requested
+        // Must be typecast back to the desired type, left as an exercise for
+        // higher-level mechanisms
         fn typeAt(self: *Self, typename: []const u8, elem_idx: usize) usize {
             const offset = SizeCalc.offset(typename);
             const elem_start = @ptrToInt(self.type_mem.ptr) + (elem_idx * self.bundle_size);
             return elem_start + offset;
         }
 
+        // Returns the id of the entity data stored at the given index
         fn idAt(self: *Self, idx: usize) IdType {
             return self.entities[idx];
         }
 
+        // Remove the given entity id
         fn remove(self: *Self, id: IdType) bool {
             var idx: usize = 0;
             while (idx != self.cursor + 1) : (idx += 1) {
@@ -317,6 +318,7 @@ pub fn ArchetypeGen(comptime Bundle: type) type {
             return self.cursor;
         }
 
+        // Increase the storage size once needed
         fn grow(self: *Self) !void {
             const new_cap = self.capacity * 2;
             self.type_mem = try self.allocator.realloc(self.type_mem, new_cap * self.bundle_size);
@@ -324,7 +326,7 @@ pub fn ArchetypeGen(comptime Bundle: type) type {
             self.capacity = new_cap;
         }
 
-        // Diagnostic functions section
+        // Diagnostic methods section
         fn printAt(self: *Self, idx: usize) void {
             std.debug.print("arch type mem @[{}]: ", .{idx});
             var i: usize = 0;
@@ -350,7 +352,7 @@ test "basic" {
 
     // Setup
     const Bundle = comptime_utils.typeFromBundle(.{ Point, Velocity });
-    var arch = try ArchetypeGen(Bundle).init(1, allocator);
+    var arch = try ArchetypeGen(Bundle).initCapacity(1, allocator, 1024);
     defer arch.deinit();
     const p = Point{ .x = 1, .y = 2 };
     const v = Velocity{ .dir = 3, .magnitude = 4 };

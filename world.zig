@@ -45,32 +45,27 @@ const World = struct {
             .arch_map = ArchetypeMap.init(allocator),
             .capacity = capacity,
             .mask_map = comp_map,
-            .entities = try Entities.initCapacity(allocator, Self.DEFAULT_CAPACITY),
+            .entities = try Entities.initCapacity(allocator, capacity),
         };
     }
 
     pub fn deinit(self: *Self) void {
-        // archetypes
         var it = self.arch_map.iterator();
         while (it.next()) |entry| {
             entry.value.deinit();
         }
-        // arch map
         self.arch_map.deinit();
-        // component map
         self.mask_map.deinit();
         self.entities.deinit();
     }
 
     pub fn spawn(self: *Self, comptime args: anytype) !Entity {
-        // Create mask from component set
         const mask = self.componentMask(args);
         return self.spawnWithMask(mask, args);
     }
 
     pub fn spawnWithMask(self: *Self, mask: MaskType, comptime args: anytype) !Entity {
         const BundleType = comptime_utils.typeFromBundle(args);
-        // Create mask from component set
         const bundle = comptime_utils.coerceToBundle(BundleType, args);
         const ent = try self.entities.alloc(mask);
         if (self.arch_map.get(mask)) |arch| {
@@ -78,7 +73,7 @@ const World = struct {
                 return ECSError.BadSpawn;
             }
         } else {
-            var dyn = try Archetype.make(BundleType, mask, self.allocator);
+            var dyn = try Archetype.make(BundleType, mask, self.allocator, self.capacity);
             if (!dyn.put(ent.id, @ptrToInt(&bundle))) {
                 return ECSError.BadSpawn;
             }
