@@ -18,7 +18,7 @@ pub const Entities = struct {
     stack: []IdType,
     cursor: usize,
 
-    pub fn init_capacity(allocator: *Allocator, capacity: usize) !Self {
+    pub fn initCapacity(allocator: *Allocator, capacity: usize) !Self {
         var self = Self{
             .allocator = allocator,
             .capacity = capacity,
@@ -89,7 +89,7 @@ test "basic" {
 
     const ENTITY_TOTAL = 1024;
 
-    var entities = try Entities.init_capacity(test_allocator, ENTITY_TOTAL);
+    var entities = try Entities.initCapacity(test_allocator, ENTITY_TOTAL);
     defer entities.deinit();
 
     {
@@ -129,7 +129,7 @@ test "storage resizing" {
     const expect = std.testing.expect;
     const ArrayList = std.ArrayList;
 
-    var entities = try Entities.init_capacity(test_allocator, 1);
+    var entities = try Entities.initCapacity(test_allocator, 1);
     defer entities.deinit();
     var ids = ArrayList(IdType).init(test_allocator);
     defer ids.deinit();

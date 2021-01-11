@@ -29,10 +29,10 @@ const World = struct {
     entities: Entities,
 
     pub fn init(allocator: *Allocator, comptime registry: anytype) !Self {
-        return Self.init_capacity(allocator, Self.DEFAULT_CAPACITY, registry);
+        return Self.initCapacity(allocator, Self.DEFAULT_CAPACITY, registry);
     }
 
-    pub fn init_capacity(allocator: *Allocator, capacity: usize, comptime registry: anytype) !Self {
+    pub fn initCapacity(allocator: *Allocator, capacity: usize, comptime registry: anytype) !Self {
         var comp_map = AutoHashMap([]const u8, MaskType).init(allocator);
         comptime var mask_val = 1;
         inline for (registry) |ty| {
@@ -45,7 +45,7 @@ const World = struct {
             .arch_map = ArchetypeMap.init(allocator),
             .capacity = capacity,
             .mask_map = comp_map,
-            .entities = try Entities.init_capacity(allocator, Self.DEFAULT_CAPACITY),
+            .entities = try Entities.initCapacity(allocator, Self.DEFAULT_CAPACITY),
         };
     }
 
@@ -64,11 +64,11 @@ const World = struct {
 
     pub fn spawn(self: *Self, comptime args: anytype) !Entity {
         // Create mask from component set
-        const mask = self.component_mask(args);
-        return self.spawn_with_mask(mask, args);
+        const mask = self.componentMask(args);
+        return self.spawnWithMask(mask, args);
     }
 
-    pub fn spawn_with_mask(self: *Self, mask: MaskType, comptime args: anytype) !Entity {
+    pub fn spawnWithMask(self: *Self, mask: MaskType, comptime args: anytype) !Entity {
         const BundleType = comptime_utils.typeFromBundle(args);
         // Create mask from component set
         const bundle = comptime_utils.coerceToBundle(BundleType, args);
@@ -78,7 +78,7 @@ const World = struct {
                 return ECSError.BadSpawn;
             }
         } else {
-            var dyn = try Archetype.make(BundleType, self.allocator);
+            var dyn = try Archetype.make(BundleType, mask, self.allocator);
             if (!dyn.put(ent.id, @ptrToInt(&bundle))) {
                 return ECSError.BadSpawn;
             }
@@ -88,11 +88,11 @@ const World = struct {
     }
 
     pub fn query(self: *Self, comptime args: anytype) ECSError!Iterator {
-        const mask = self.component_mask(args);
-        return self.query_with_mask(mask, args);
+        const mask = self.componentMask(args);
+        return self.queryWithMask(mask, args);
     }
 
-    pub fn query_with_mask(self: *Self, mask: MaskType, comptime args: anytype) ECSError!Iterator {
+    pub fn queryWithMask(self: *Self, mask: MaskType, comptime args: anytype) ECSError!Iterator {
         return Iterator.init(self, mask);
     }
 
@@ -105,7 +105,7 @@ const World = struct {
         }
     }
 
-    pub fn component_mask(self: *Self, comptime component_tuple: anytype) MaskType {
+    pub fn componentMask(self: *Self, comptime component_tuple: anytype) MaskType {
         comptime var isType = true;
         const info = @typeInfo(@TypeOf(component_tuple[0]));
         if (info == .Struct) {
@@ -143,13 +143,13 @@ test "world test" {
     var ent = try world.spawn(.{p});
     var ent2 = try world.spawn(.{Point{ .x = 3, .y = 4 }});
 
-    const mask = world.component_mask(.{ Point, Velocity });
-    const mask2 = world.component_mask(.{ p, v });
+    const mask = world.componentMask(.{ Point, Velocity });
+    const mask2 = world.componentMask(.{ p, v });
     expect(mask == mask2);
 
-    const old_cursor = world.arch_map.get(world.component_mask(.{p})).?.cursor();
+    const old_cursor = world.arch_map.get(world.componentMask(.{p})).?.cursor();
     expect(world.remove(ent));
-    expect(world.arch_map.get(world.component_mask(.{p})).?.cursor() == old_cursor - 1);
+    expect(world.arch_map.get(world.componentMask(.{p})).?.cursor() == old_cursor - 1);
 }
 
 // Used to create systems.
@@ -181,30 +181,52 @@ const Iterator = struct {
         };
     }
 
-    fn next(self: *Self) bool {
+    // Update the query state to the next entry in the world
+    // Returns false when done iterating
+    pub fn next(self: *Self) bool {
+        self.cursor += 1;
         // If we've reached the end of the current archetype's storage, move to
         //  the next and reset the cursor
-        if (self.cursor == self.arch.cursor()) {
-            if (self.it.next()) |entry_ptr| {
-                self.arch = &entry_ptr.value;
-            } else {
-                // Return false if we've finished query
+        if (self.cursor > self.arch.cursor()) {
+            if (!self.nextArch()) {
                 return false;
             }
-            self.cursor = 0;
-        } else {
-            self.cursor += 1;
+            self.cursor = 1;
         }
         return true;
     }
 
-    pub fn get(self: *Self, comptime T: type) T {
-        const type_ptr = self.arch.type_at(@typeName(T), self.cursor - 1);
+    // Internal helper method to find the next valid archetype in the map
+    fn nextArch(self: *Self) bool {
+        if (self.it.next()) |entry| {
+            if (self.mask == self.mask & entry.value.mask()) {
+                self.arch = &entry.value;
+            } else {
+                return self.nextArch();
+            }
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    // Get data from the current query index that cannot mutate the archetype's
+    // memory
+    pub fn data(self: *Self, comptime T: type) T {
+        const type_ptr = self.arch.typeAt(@typeName(T), self.cursor - 1);
         return @intToPtr(*T, type_ptr).*;
     }
-    pub fn get_mut(self: *Self, comptime T: type) *T {
-        const type_ptr = self.arch.type_at(@typeName(T), self.cursor - 1);
+
+    // Get data from the current query index that can mutate the archetype's
+    // memory
+    pub fn dataMut(self: *Self, comptime T: type) *T {
+        const type_ptr = self.arch.typeAt(@typeName(T), self.cursor - 1);
         return @intToPtr(*T, type_ptr);
+    }
+
+    // Reconstruct an Entity from a query entry (used in removal)
+    pub fn entity(self: *Self) Entity {
+        return .{ .id = self.arch.idAt(self.cursor), .location = self.mask };
     }
 };
 
@@ -215,40 +237,98 @@ test "query test" {
     const Point = struct { x: u32, y: u32 };
     const Velocity = struct { dir: u6, magnitude: u32 };
 
-    const p1: Point = .{ .x = 1, .y = 1 };
-    const p2: Point = .{ .x = 2, .y = 2 };
-    const p3: Point = .{ .x = 3, .y = 3 };
+    // Spawn and remove test
+    {
+        var world = try World.init(allocator, .{Point});
+        defer world.deinit();
+        var ent = try world.spawn(.{Point{ .x = 0, .y = 0 }});
+        expect(ent.location == world.componentMask(.{Point}));
 
-    var world = try World.init(allocator, .{ Point, Velocity });
-    defer world.deinit();
+        var query = try world.query(.{Point});
+        while (query.next()) {
+            var pt = query.data(Point);
+            expect(pt.x == 0);
+            expect(pt.y == 0);
+            const entity = query.entity();
+            expect(entity.location == world.componentMask(.{Point}));
 
-    var ent1 = world.spawn(.{p1});
-    var ent2 = world.spawn(.{p2});
-    var ent3 = world.spawn(.{p3});
+            expect(world.remove(ent));
+        }
+    }
 
-    var query = try world.query(.{Point});
-    var cnt: usize = 0;
-    while (query.next()) {
-        cnt += 1;
-        // First check that we can get the item and mutate w/o mutating
-        // archetype memory
-        var point: Point = query.get(Point);
-        expect(point.x == cnt);
-        expect(point.y == cnt);
-        point.x -= 1;
+    // Queries inclusively over multiple architectures
+    {
+        const p1: Point = .{ .x = 1, .y = 1 };
+        const p2: Point = .{ .x = 2, .y = 2 };
+        const p3: Point = .{ .x = 3, .y = 3 };
 
-        var point_check: Point = query.get(Point);
-        expect(point_check.x == cnt);
-        expect(point_check.y == cnt);
+        // Spawn
+        var world = try World.init(allocator, .{ Point, Velocity });
+        defer world.deinit();
 
-        // Next, check that we can get an item and mutate archetype memory
-        var point_ref: *Point = query.get_mut(Point);
-        expect(point_ref.x == cnt);
-        expect(point_ref.y == cnt);
-        point_ref.x -= 1;
+        var ent1 = world.spawn(.{p1});
+        var ent2 = world.spawn(.{p2});
+        var ent3 = world.spawn(.{p3});
 
-        point_check = query.get(Point);
-        expect(point_check.x == cnt - 1);
-        expect(point_check.y == cnt);
+        var ent4 = world.spawn(.{ Point{ .x = 4, .y = 4 }, Velocity{ .dir = 4, .magnitude = 4 } });
+        var ent5 = world.spawn(.{ Point{ .x = 5, .y = 5 }, Velocity{ .dir = 5, .magnitude = 5 } });
+        var ent6 = world.spawn(.{ Point{ .x = 6, .y = 6 }, Velocity{ .dir = 6, .magnitude = 6 } });
+
+        var query = try world.query(.{Point});
+        var cnt: usize = 0;
+        while (query.next()) {
+            cnt += 1;
+            // First check that we can get the item and mutate w/o mutating
+            // archetype memory
+            var point: Point = query.data(Point);
+            expect(point.x == cnt);
+            expect(point.y == cnt);
+            point.x -= 1;
+
+            var point_check: Point = query.data(Point);
+            expect(point_check.x == cnt);
+            expect(point_check.y == cnt);
+
+            // Next, check that we can get an item and mutate archetype memory
+            var point_ref: *Point = query.dataMut(Point);
+            expect(point_ref.x == cnt);
+            expect(point_ref.y == cnt);
+            point_ref.x -= 1;
+
+            point_check = query.data(Point);
+            expect(point_check.x == cnt - 1);
+            expect(point_check.y == cnt);
+        }
+        expect(cnt == 6);
+    }
+
+    // Query excludes some archetypes
+    {
+        const p1: Point = .{ .x = 1, .y = 1 };
+        const p2: Point = .{ .x = 2, .y = 2 };
+        const p3: Point = .{ .x = 3, .y = 3 };
+
+        // Spawn
+        var world = try World.init(allocator, .{ Point, Velocity });
+        defer world.deinit();
+
+        var ent1 = world.spawn(.{Point{ .x = 1, .y = 1 }});
+        var ent2 = world.spawn(.{Point{ .x = 2, .y = 2 }});
+        var ent3 = world.spawn(.{Point{ .x = 3, .y = 3 }});
+
+        // We should be skipping entries with the Velocity-only archetype
+        var ent4 = world.spawn(.{Velocity{ .dir = 4, .magnitude = 4 }});
+        var ent5 = world.spawn(.{Velocity{ .dir = 5, .magnitude = 5 }});
+        var ent6 = world.spawn(.{Velocity{ .dir = 6, .magnitude = 6 }});
+
+        var query = try world.query(.{Point});
+        var cnt: usize = 0;
+        while (query.next()) {
+            cnt += 1;
+            var point: Point = query.data(Point);
+            expect(point.x == cnt);
+            expect(point.y == cnt);
+        }
+        expect(cnt == 3);
     }
 }
