@@ -88,7 +88,7 @@ const World = struct {
     }
 
     pub fn queryWithMask(self: *Self, mask: MaskType, comptime args: anytype) ECSError!Iterator {
-        return Iterator.init(self, mask);
+        return Iterator.init(self);
     }
 
     pub fn remove(self: *Self, entity: Entity) bool {
@@ -159,7 +159,7 @@ const Iterator = struct {
     cursor: usize,
     mask: MaskType,
 
-    fn init(world: *World, mask: MaskType) ECSError!Self {
+    fn init(world: *World) ECSError!Self {
         var it = world.arch_map.iterator();
         const maybe_entry = it.next();
         var entry: *World.ArchetypeMap.Entry = undefined;
@@ -172,7 +172,7 @@ const Iterator = struct {
             .it = it,
             .arch = &entry.value,
             .cursor = 0,
-            .mask = mask,
+            .mask = entry.value.mask(),
         };
     }
 
@@ -195,6 +195,7 @@ const Iterator = struct {
     fn nextArch(self: *Self) bool {
         if (self.it.next()) |entry| {
             if (self.mask == self.mask & entry.value.mask()) {
+                self.mask = entry.value.mask();
                 self.arch = &entry.value;
             } else {
                 return self.nextArch();
@@ -221,7 +222,7 @@ const Iterator = struct {
 
     // Reconstruct an Entity from a query entry (used in removal)
     pub fn entity(self: *Self) Entity {
-        return .{ .id = self.arch.idAt(self.cursor), .location = self.mask };
+        return .{ .id = self.arch.idAt(self.cursor - 1), .location = self.mask };
     }
 };
 
@@ -325,5 +326,37 @@ test "query test" {
             expect(point.y == cnt);
         }
         expect(cnt == 3);
+    }
+}
+
+test "README example" {
+    const allocator = std.testing.allocator;
+    const expect = std.testing.expect;
+
+    const Position = struct { x: u32, y: u32 };
+    const Velocity = struct { dir: u6, magnitude: u32 };
+
+    // Create a world from your component types
+    var world = try World.init(allocator, .{ Position, Velocity });
+    defer world.deinit();
+
+    // Create entries with any combination of types
+    var entity = try world.spawn(.{Position{ .x = 5, .y = 7 }});
+    var entity2 = try world.spawn(.{ Position{ .x = 1, .y = 2 }, Velocity{ .dir = 13, .magnitude = 200 } });
+
+    // Query for all entries containing a Position
+    var query = try world.query(.{Position});
+
+    while (query.next()) {
+        var position = query.dataMut(Position);
+        position.x *= 2;
+
+        const ent = query.entity();
+
+        if (world.remove(ent)) {
+            //std.debug.print("removed entity: {}, with position: {}\n", .{ ent, position });
+        } else {
+            expect(false);
+        }
     }
 }
