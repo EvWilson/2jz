@@ -12,8 +12,11 @@ const ent_file = @import("./entities.zig");
 const Entity = ent_file.Entity;
 const Entities = ent_file.Entities;
 
-const ECSError = error{ InvalidIterator, NoSuchEntity };
+// Possible errors that can arise from operation
+const ECSError = error{ BadSpawn, InvalidIterator, NoSuchEntity };
 
+// The main encompassing struct for the library, its methods are effectively the
+// API to the library.
 const World = struct {
     const Self = @This();
     const DEFAULT_CAPACITY = 1024;
@@ -60,28 +63,36 @@ const World = struct {
     }
 
     pub fn spawn(self: *Self, comptime args: anytype) !Entity {
+        // Create mask from component set
+        const mask = self.component_mask(args);
+        return self.spawn_with_mask(mask, args);
+    }
+
+    pub fn spawn_with_mask(self: *Self, mask: MaskType, comptime args: anytype) !Entity {
         const BundleType = comptime_utils.typeFromBundle(args);
         // Create mask from component set
-        const mask = self.getComponentMask(args);
         const bundle = comptime_utils.coerceToBundle(BundleType, args);
         const ent = try self.entities.alloc(mask);
         if (self.arch_map.get(mask)) |arch| {
-            arch.put(ent.id, @ptrToInt(&bundle));
+            if (!arch.put(ent.id, @ptrToInt(&bundle))) {
+                return ECSError.BadSpawn;
+            }
         } else {
             var dyn = try Archetype.make(BundleType, self.allocator);
-            dyn.put(ent.id, @ptrToInt(&bundle));
+            if (!dyn.put(ent.id, @ptrToInt(&bundle))) {
+                return ECSError.BadSpawn;
+            }
             try self.arch_map.put(mask, dyn);
         }
         return ent;
     }
 
     pub fn query(self: *Self, comptime args: anytype) ECSError!Iterator {
-        // Only take tuples as component bundles
-        const type_info = @typeInfo(@TypeOf(args));
-        if (type_info != .Struct or type_info.Struct.is_tuple != true) {
-            @compileError("Expected tuple for components");
-        }
-        const mask = self.getComponentMask(args);
+        const mask = self.component_mask(args);
+        return self.query_with_mask(mask, args);
+    }
+
+    pub fn query_with_mask(self: *Self, mask: MaskType, comptime args: anytype) ECSError!Iterator {
         return Iterator.init(self, mask);
     }
 
@@ -94,7 +105,7 @@ const World = struct {
         }
     }
 
-    fn getComponentMask(self: *Self, comptime component_tuple: anytype) MaskType {
+    pub fn component_mask(self: *Self, comptime component_tuple: anytype) MaskType {
         comptime var isType = true;
         const info = @typeInfo(@TypeOf(component_tuple[0]));
         if (info == .Struct) {
@@ -132,15 +143,18 @@ test "world test" {
     var ent = try world.spawn(.{p});
     var ent2 = try world.spawn(.{Point{ .x = 3, .y = 4 }});
 
-    const mask = world.getComponentMask(.{ Point, Velocity });
-    const mask2 = world.getComponentMask(.{ p, v });
+    const mask = world.component_mask(.{ Point, Velocity });
+    const mask2 = world.component_mask(.{ p, v });
     expect(mask == mask2);
 
-    const old_cursor = world.arch_map.get(world.getComponentMask(.{p})).?.cursor();
+    const old_cursor = world.arch_map.get(world.component_mask(.{p})).?.cursor();
     expect(world.remove(ent));
-    expect(world.arch_map.get(world.getComponentMask(.{p})).?.cursor() == old_cursor - 1);
+    expect(world.arch_map.get(world.component_mask(.{p})).?.cursor() == old_cursor - 1);
 }
 
+// Used to create systems.
+// Users query a World instance and receive one of these in response, with which
+// they're able to loop over the world state and access the data for each entity
 const Iterator = struct {
     const Self = @This();
     const IterType = World.ArchetypeMap.Iterator;
@@ -188,6 +202,10 @@ const Iterator = struct {
         const type_ptr = self.arch.type_at(@typeName(T), self.cursor - 1);
         return @intToPtr(*T, type_ptr).*;
     }
+    pub fn get_mut(self: *Self, comptime T: type) *T {
+        const type_ptr = self.arch.type_at(@typeName(T), self.cursor - 1);
+        return @intToPtr(*T, type_ptr);
+    }
 };
 
 test "query test" {
@@ -196,14 +214,12 @@ test "query test" {
 
     const Point = struct { x: u32, y: u32 };
     const Velocity = struct { dir: u6, magnitude: u32 };
-    const HitPoints = struct { hp: u32 };
 
     const p1: Point = .{ .x = 1, .y = 1 };
     const p2: Point = .{ .x = 2, .y = 2 };
     const p3: Point = .{ .x = 3, .y = 3 };
-    const v: Velocity = .{ .dir = 5, .magnitude = 6 };
 
-    var world = try World.init(allocator, .{ Point, Velocity, HitPoints });
+    var world = try World.init(allocator, .{ Point, Velocity });
     defer world.deinit();
 
     var ent1 = world.spawn(.{p1});
@@ -214,20 +230,25 @@ test "query test" {
     var cnt: usize = 0;
     while (query.next()) {
         cnt += 1;
-        const point: Point = query.get(Point);
+        // First check that we can get the item and mutate w/o mutating
+        // archetype memory
+        var point: Point = query.get(Point);
         expect(point.x == cnt);
         expect(point.y == cnt);
+        point.x -= 1;
+
+        var point_check: Point = query.get(Point);
+        expect(point_check.x == cnt);
+        expect(point_check.y == cnt);
+
+        // Next, check that we can get an item and mutate archetype memory
+        var point_ref: *Point = query.get_mut(Point);
+        expect(point_ref.x == cnt);
+        expect(point_ref.y == cnt);
+        point_ref.x -= 1;
+
+        point_check = query.get(Point);
+        expect(point_check.x == cnt - 1);
+        expect(point_check.y == cnt);
     }
-}
-
-test "integration 1" {
-    const allocator = std.testing.allocator;
-    const expect = std.testing.expect;
-
-    const Point = struct { x: u32, y: u32 };
-    const Velocity = struct { dir: u6, magnitude: u32 };
-    const HitPoints = struct { hp: u32 };
-
-    var world = try World.init(allocator, .{ Point, Velocity, HitPoints });
-    defer world.deinit();
 }

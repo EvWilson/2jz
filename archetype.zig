@@ -8,17 +8,18 @@ const MaskType = comptime_utils.MaskType;
 const IdType = comptime_utils.IdType;
 
 // Inspired by Alex Naskos' Runtime Polymorphism talk, 14:53
+// This is entirely a proxy object for types returned by ArchetypeGen below,
+// used to provide an interface over the produced generics.
+// For archetype's operation, see ArchetypeGen.
 pub const Archetype = struct {
     const Self = @This();
     const VTable = struct {
         deinit: fn (usize) void,
-        get_idx: fn (usize, usize) usize,
-        get_idx_mut: fn (usize, usize) usize,
         cursor: fn (usize) usize,
-        put: fn (usize, IdType, usize) void,
+        put: fn (usize, IdType, usize) bool,
         remove: fn (usize, IdType) bool,
         type_at: fn (usize, []const u8, usize) usize,
-
+        // For diagnostic purposes
         print_at: fn (usize, usize) void,
     };
     alloc: *Allocator,
@@ -29,20 +30,12 @@ pub const Archetype = struct {
         self.vtable.deinit(self.object);
     }
 
-    pub fn get_idx(self: @This(), idx: usize) usize {
-        return self.vtable.get_idx(self.object, idx);
-    }
-
-    pub fn get_idx_mut(self: @This(), idx: usize) usize {
-        return self.vtable.get_idx_mut(self.object, idx);
-    }
-
     pub fn cursor(self: @This()) usize {
         return self.vtable.cursor(self.object);
     }
 
-    pub fn put(self: @This(), id: IdType, bundle_ptr: usize) void {
-        self.vtable.put(self.object, id, bundle_ptr);
+    pub fn put(self: @This(), id: IdType, bundle_ptr: usize) bool {
+        return self.vtable.put(self.object, id, bundle_ptr);
     }
 
     pub fn remove(self: @This(), id: IdType) bool {
@@ -53,13 +46,16 @@ pub const Archetype = struct {
         return self.vtable.type_at(self.object, typename, elem_idx);
     }
 
+    pub fn print_at(self: @This(), idx: usize) void {
+        self.vtable.print_at(self.object, idx);
+    }
+
+    // This function and the one below are what set up the dynamic reference to
+    // the type returned by ArchetypeGen, including putting together the
+    // function pointers for the vtable
     pub fn make(comptime Bundle: type, alloc: *Allocator) !Self {
         const arch = try ArchetypeGen(Bundle).init(alloc);
         return makeInternal(Bundle, alloc, arch);
-    }
-
-    pub fn print_at(self: @This(), idx: usize) void {
-        self.vtable.print_at(self.object, idx);
     }
 
     fn makeInternal(comptime Bundle: type, alloc: *Allocator, arch: anytype) Self {
@@ -74,20 +70,6 @@ pub const Archetype = struct {
                         @call(.{ .modifier = .always_inline }, std.meta.Child(PtrType).deinit, .{self});
                     }
                 }.deinit,
-                .get_idx = struct {
-                    fn get_idx(ptr: usize, idx: usize) usize {
-                        const self = @intToPtr(PtrType, ptr);
-                        const ret_ptr = @call(.{ .modifier = .always_inline }, std.meta.Child(PtrType).get_idx, .{ self, idx });
-                        return @ptrToInt(ret_ptr);
-                    }
-                }.get_idx,
-                .get_idx_mut = struct {
-                    fn get_idx_mut(ptr: usize, idx: usize) usize {
-                        const self = @intToPtr(PtrType, ptr);
-                        const ret_ptr = @call(.{ .modifier = .always_inline }, std.meta.Child(PtrType).get_idx_mut, .{ self, idx });
-                        return @ptrToInt(ret_ptr);
-                    }
-                }.get_idx_mut,
                 .cursor = struct {
                     fn cursor(ptr: usize) usize {
                         const self = @intToPtr(PtrType, ptr);
@@ -95,10 +77,10 @@ pub const Archetype = struct {
                     }
                 }.cursor,
                 .put = struct {
-                    fn put(ptr: usize, id: IdType, bundle_ptr: usize) void {
+                    fn put(ptr: usize, id: IdType, bundle_ptr: usize) bool {
                         const self = @intToPtr(PtrType, ptr);
                         const bundle: *Bundle = @intToPtr(*Bundle, bundle_ptr);
-                        @call(.{ .modifier = .always_inline }, std.meta.Child(PtrType).put, .{ self, id, bundle.* });
+                        return @call(.{ .modifier = .always_inline }, std.meta.Child(PtrType).put, .{ self, id, bundle.* });
                     }
                 }.put,
                 .remove = struct {
@@ -141,7 +123,6 @@ test "vtable" {
     const v = Velocity{ .dir = 7, .magnitude = 8 };
     const types = .{ Point, Velocity };
     const Bundle = comptime_utils.typeFromBundle(.{ Point, Velocity });
-    const BundleMut = comptime_utils.makeBundleMut(Bundle);
     var arch = try ArchetypeGen(Bundle).init(allocator);
 
     // Set up the dynamic reference
@@ -150,53 +131,33 @@ test "vtable" {
 
     // `put`
     const add: Bundle = .{ .Point = p, .Velocity = v };
-    dyn.put(0, @ptrToInt(&add));
+    expect(dyn.put(0, @ptrToInt(&add)));
 
-    // `get` - non-mutable
-    var bundle_ptr: usize = dyn.get_idx(0);
-    var bundle: Bundle = @intToPtr(*Bundle, bundle_ptr).*;
-    expect(bundle.Point.x == 1 and bundle.Point.y == 2 and
-        bundle.Velocity.dir == 7 and bundle.Velocity.magnitude == 8);
-    var cnt: usize = 0;
-    var sum: usize = 0;
-    while (cnt < 16) : (cnt += 1) {
-        sum += arch.type_mem[cnt];
+    // `type_at` - ensure the produced reference can mutate the archetype memory
+    // Point
+    const point_ptr: usize = dyn.type_at(@typeName(Point), 0);
+    const point: *Point = @intToPtr(*Point, point_ptr);
+    expect(point.x == 1);
+    expect(point.y == 2);
+    point.x += 10;
+    expect(point.x == 11);
+    expect(point.y == 2);
+    // Check first 4 bytes of memory (Point x) to make sure it's mutated
+    var i: usize = 0;
+    var total: usize = 0;
+    while (i < 4) : (i += 1) {
+        total += arch.type_mem[i];
     }
-    expect(sum == 18);
-    bundle.Point.x += 10;
-    cnt = 0;
-    sum = 0;
-    while (cnt < 16) : (cnt += 1) {
-        sum += arch.type_mem[cnt];
-    }
-    expect(bundle.Point.x == 11 and sum == 18);
-
-    // `get` - mutable
-    bundle_ptr = dyn.get_idx_mut(0);
-    var bundle_mut: BundleMut = @intToPtr(*BundleMut, bundle_ptr).*;
-    expect(bundle_mut.Point.x == 1 and bundle_mut.Point.y == 2 and
-        bundle_mut.Velocity.dir == 7 and bundle_mut.Velocity.magnitude == 8);
-    cnt = 0;
-    sum = 0;
-    while (cnt < 16) : (cnt += 1) {
-        sum += arch.type_mem[cnt];
-    }
-    expect(sum == 18);
-    bundle_mut.Point.x += 10;
-    cnt = 0;
-    sum = 0;
-    while (cnt < 16) : (cnt += 1) {
-        sum += arch.type_mem[cnt];
-    }
-    expect(bundle_mut.Point.x == 11 and sum == 28);
+    expect(total == 11);
+    // Velocity
+    const vel_ptr: usize = arch.type_at(@typeName(Velocity), 0);
+    const vel: *Velocity = @intToPtr(*Velocity, vel_ptr);
+    expect(vel.dir == 7);
+    expect(vel.magnitude == 8);
 }
 
 pub fn ArchetypeGen(comptime Bundle: type) type {
     const info = @typeInfo(Bundle);
-
-    // Create another struct from the passed in type to be used as a mutable
-    // return value
-    const BundleMut = comptime_utils.makeBundleMut(Bundle);
 
     const SizeCalc = struct {
         fn offset(name: []const u8) u32 {
@@ -230,9 +191,13 @@ pub fn ArchetypeGen(comptime Bundle: type) type {
         type_mem: []u8,
 
         fn init(alloc: *Allocator) !*Self {
+            return Self.init_capacity(alloc, Self.DEFAULT_CAPACITY);
+        }
+
+        fn init_capacity(alloc: *Allocator, capacity: u32) !*Self {
             var result: *Self = try alloc.create(Self);
             result.allocator = alloc;
-            result.capacity = Self.DEFAULT_CAPACITY;
+            result.capacity = capacity;
             result.cursor = 0;
             result.entity_ids = try alloc.alloc(MaskType, Self.DEFAULT_CAPACITY);
             comptime var total_size = 0;
@@ -251,10 +216,10 @@ pub fn ArchetypeGen(comptime Bundle: type) type {
             self.allocator.destroy(self);
         }
 
-        fn put(self: *Self, id: IdType, bundle: Bundle) void {
+        // Stores the given bundle into the archetype
+        fn put(self: *Self, id: IdType, bundle: Bundle) bool {
             if (self.cursor == self.capacity) {
-                std.debug.print("cursor ({}) met capacity({}). GROWING MEM REGION.\n", .{ self.cursor, self.capacity });
-                self.grow();
+                self.grow() catch return false;
             }
             comptime var offset = 0;
             const field_info = @typeInfo(@TypeOf(bundle));
@@ -268,43 +233,13 @@ pub fn ArchetypeGen(comptime Bundle: type) type {
             }
             self.entity_ids[self.cursor] = id;
             self.cursor += 1;
-        }
-
-        fn get_idx(self: *Self, idx: usize) *Bundle {
-            var struct_mem = self.type_mem;
-            struct_mem.ptr += idx * self.bundle_size;
-
-            var result: Bundle = .{};
-            inline for (info.Struct.fields) |field, i| {
-                const field_type = @TypeOf(field.default_value.?);
-                // For the current field, set it to a dereferenced pointer of
-                // the current location in the data array
-                @field(result, @typeName(field_type)) =
-                    @ptrCast(*field_type, @alignCast(@sizeOf(field_type), struct_mem)).*;
-                struct_mem.ptr += @sizeOf(field_type);
-            }
-
-            return &result;
+            return true;
         }
 
         fn type_at(self: *Self, typename: []const u8, elem_idx: usize) usize {
             const offset = SizeCalc.offset(typename);
-            const elem_start = @ptrToInt(self.get_idx(elem_idx));
+            const elem_start = @ptrToInt(self.type_mem.ptr) + (elem_idx * self.bundle_size);
             return elem_start + offset;
-        }
-
-        fn get_idx_mut(self: *Self, idx: usize) *BundleMut {
-            var struct_mem = self.type_mem;
-            struct_mem.ptr += idx * self.bundle_size;
-
-            var result: BundleMut = undefined;
-            inline for (info.Struct.fields) |field, i| {
-                const field_type = @TypeOf(field.default_value.?);
-                @field(result, @typeName(field_type)) =
-                    @ptrCast(*field_type, @alignCast(@sizeOf(field_type), struct_mem));
-                struct_mem.ptr += @sizeOf(field_type);
-            }
-            return &result;
         }
 
         fn remove(self: *Self, id: IdType) bool {
@@ -318,6 +253,9 @@ pub fn ArchetypeGen(comptime Bundle: type) type {
             return false;
         }
 
+        // Effectively works as a swap-remove
+        // Copies bundle at end of array to indicated location and decrements
+        // cursor
         fn remove_idx(self: *Self, idx: usize) void {
             var dest_slice: []u8 = self.type_mem;
             dest_slice.ptr += idx * self.bundle_size;
@@ -344,10 +282,11 @@ pub fn ArchetypeGen(comptime Bundle: type) type {
             return self.cursor;
         }
 
-        // TODO
-        fn grow(self: *Self) void {
-            std.debug.print("UNIMPLEMENTED: hit archetype grow function\n", .{});
-            std.debug.assert(false);
+        fn grow(self: *Self) !void {
+            const new_cap = self.capacity * 2;
+            self.type_mem = try self.allocator.realloc(self.type_mem, new_cap * self.bundle_size);
+            self.entity_ids = try self.allocator.realloc(self.entity_ids, new_cap);
+            self.capacity = new_cap;
         }
 
         // Diagnostic functions section
@@ -366,8 +305,7 @@ pub fn ArchetypeGen(comptime Bundle: type) type {
     };
 }
 
-test "archetype test" {
-    const eql = std.mem.eql;
+test "basic" {
     const allocator = std.testing.allocator;
     const expect = std.testing.expect;
 
@@ -388,25 +326,8 @@ test "archetype test" {
 
     // `put` testing
     expect(arch.cursor == 0);
-    arch.put(0, .{ .Point = p, .Velocity = v });
+    expect(arch.put(0, .{ .Point = p, .Velocity = v }));
     expect(arch.cursor == 1);
-
-    // `get` testing - non-mutable
-    // Can mutate struct values, but not underlying memory
-    var bundle = arch.get_idx(0);
-    expect(bundle.Point.x == 1);
-    expect(bundle.Point.y == 2);
-    expect(bundle.Velocity.dir == 3);
-    expect(bundle.Velocity.magnitude == 4);
-    bundle.Point.x += 10;
-    expect(bundle.Point.x == 11);
-    // Check first 4 bytes of memory (Point x) to make sure it's unaffected
-    var i: usize = 0;
-    var total: usize = 0;
-    while (i < 4) : (i += 1) {
-        total += arch.type_mem[i];
-    }
-    expect(total == 1);
 
     // Get with type
     // Point
@@ -417,36 +338,56 @@ test "archetype test" {
     point.x += 10;
     expect(point.x == 11);
     expect(point.y == 2);
-    // Check first 4 bytes of memory (Point x) to make sure it's unaffected
-    i = 0;
-    total = 0;
+    // Check first 4 bytes of memory (Point x) to make sure it's mutated
+    var i: usize = 0;
+    var total: usize = 0;
     while (i < 4) : (i += 1) {
         total += arch.type_mem[i];
     }
-    expect(total == 1);
+    expect(total == 11);
     // Velocity
     const vel_ptr: usize = arch.type_at(@typeName(Velocity), 0);
     const vel: *Velocity = @intToPtr(*Velocity, vel_ptr);
     expect(vel.dir == 3);
     expect(vel.magnitude == 4);
+}
 
-    // `get` testing - mutable
-    // Struct member mutations directly mutate underlying archetype memory
-    var mut_bundle = arch.get_idx_mut(0);
-    expect(mut_bundle.Point.x == 1);
-    expect(mut_bundle.Point.y == 2);
-    expect(mut_bundle.Velocity.dir == 3);
-    expect(mut_bundle.Velocity.magnitude == 4);
-    mut_bundle.Point.x += 10;
-    expect(mut_bundle.Point.x == 11);
-    // Leaving this check in because this section was rather wonky for a while
-    expect(@ptrToInt(arch.type_mem.ptr) == @ptrToInt(mut_bundle.Point));
-    expect(@ptrToInt(arch.type_mem.ptr) + @sizeOf(Point) == @ptrToInt(mut_bundle.Velocity));
-    // Check first 4 bytes of memory (Point x) to make sure it's been mutated
-    i = 0;
-    total = 0;
-    while (i < 4) : (i += 1) {
-        total += arch.type_mem[i];
-    }
-    expect(total == 11);
+test "storage resizing" {
+    const allocator = std.testing.allocator;
+    const expect = std.testing.expect;
+
+    const Point = struct { x: u32, y: u32 };
+    const Velocity = struct { dir: u6, magnitude: u32 };
+    const HitPoints = struct { hp: u32 };
+
+    // Setup
+    const Bundle = comptime_utils.typeFromBundle(.{ Point, Velocity });
+    var arch = try ArchetypeGen(Bundle).init_capacity(allocator, 1);
+    defer arch.deinit();
+
+    // Spawned: 1, cap: 1
+    expect(arch.put(0, .{ .Point = .{ .x = 1, .y = 1 }, .Velocity = .{ .dir = 1, .magnitude = 1 } }));
+    const pt = @intToPtr(*Point, arch.type_at(@typeName(Point), 0));
+    expect(pt.x == 1 and pt.y == 1);
+    const vel = @intToPtr(*Velocity, arch.type_at(@typeName(Velocity), 0));
+    expect(vel.dir == 1 and vel.magnitude == 1);
+
+    // Spawned: 2, cap: 1 -> 2
+    expect(arch.put(1, .{ .Point = .{ .x = 2, .y = 2 }, .Velocity = .{ .dir = 2, .magnitude = 2 } }));
+    const pt2 = @intToPtr(*Point, arch.type_at(@typeName(Point), 1));
+    expect(pt2.x == 2 and pt2.y == 2);
+    const vel2 = @intToPtr(*Velocity, arch.type_at(@typeName(Velocity), 1));
+    expect(vel2.dir == 2 and vel2.magnitude == 2);
+    // Check first index again after resizing, just in case
+    const pt1 = @intToPtr(*Point, arch.type_at(@typeName(Point), 0));
+    expect(pt1.x == 1 and pt1.y == 1);
+    const vel1 = @intToPtr(*Velocity, arch.type_at(@typeName(Velocity), 0));
+    expect(vel1.dir == 1 and vel1.magnitude == 1);
+
+    // Spawned: 3, cap: 2 -> 4
+    expect(arch.put(2, .{ .Point = .{ .x = 3, .y = 3 }, .Velocity = .{ .dir = 3, .magnitude = 3 } }));
+    const pt3 = @intToPtr(*Point, arch.type_at(@typeName(Point), 2));
+    expect(pt3.x == 3 and pt3.y == 3);
+    const vel3 = @intToPtr(*Velocity, arch.type_at(@typeName(Velocity), 2));
+    expect(vel3.dir == 3 and vel3.magnitude == 3);
 }
