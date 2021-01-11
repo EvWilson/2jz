@@ -334,15 +334,15 @@ test "README example" {
     const expect = std.testing.expect;
 
     const Position = struct { x: u32, y: u32 };
-    const Velocity = struct { dir: u6, magnitude: u32 };
+    const HP = struct { points: u8, alive: bool };
 
     // Create a world from your component types
-    var world = try World.init(allocator, .{ Position, Velocity });
+    var world = try World.init(allocator, .{ Position, HP });
     defer world.deinit();
 
     // Create entries with any combination of types
     var entity = try world.spawn(.{Position{ .x = 5, .y = 7 }});
-    var entity2 = try world.spawn(.{ Position{ .x = 1, .y = 2 }, Velocity{ .dir = 13, .magnitude = 200 } });
+    var entity2 = try world.spawn(.{ Position{ .x = 1, .y = 2 }, HP{ .points = 100, .alive = true } });
 
     // Query for all entries containing a Position
     var query = try world.query(.{Position});
@@ -353,6 +353,7 @@ test "README example" {
 
         const ent = query.entity();
 
+        // Prints both entities' Position information
         if (world.remove(ent)) {
             //std.debug.print("removed entity: {}, with position: {}\n", .{ ent, position });
         } else {
