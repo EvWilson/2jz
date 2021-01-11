@@ -48,8 +48,8 @@ descriptions.
 ### What's this archetype bit about?
 The naive approach to this architecture might have you arrange your components
 in separate arrays of some kind, as seen in
-[this easy to follow jumping off point](https://austinmorlan.com/posts/entity_component_system/)
-. However, this approach effectively kills your chances of pulling in all the
+[this easy to follow jumping off point](https://austinmorlan.com/posts/entity_component_system/).
+However, this approach effectively kills your chances of pulling in all the
 information you need for a given system's operation in a minimal number of cache
 lines. The archetype helps to group your heterogeneous data together as densely
 as possible, allowing for efficient memory access and minimal need for the
