@@ -16,4 +16,5 @@ From within this directory, run `zig build demo`
 
 TODO:
 handle w/s up/down input events
-render system, movement system
+movement system, probably will have to have paddles and ball separate
+scorekeeping and exiting

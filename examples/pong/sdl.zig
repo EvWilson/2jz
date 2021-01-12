@@ -32,11 +32,3 @@ pub extern fn SDL_RenderCopyEx(
     center: ?*const c.SDL_Point,
     flip: c_int, // SDL_RendererFlip
 ) c_int;
-
-pub fn assertZero(ret: c_int) void {
-    if (ret == 0) return;
-    std.debug.panic("sdl function returned an error: {}", .{c.SDL_GetError()});
-}
-
-pub const Renderer = c.SDL_Renderer;
-pub const Texture = c.SDL_Texture;

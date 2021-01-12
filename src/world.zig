@@ -88,7 +88,7 @@ pub const World = struct {
     }
 
     pub fn queryWithMask(self: *Self, mask: MaskType, comptime args: anytype) ECSError!Iterator {
-        return Iterator.init(self);
+        return Iterator.init(self, mask);
     }
 
     pub fn remove(self: *Self, entity: Entity) bool {
@@ -159,7 +159,7 @@ const Iterator = struct {
     cursor: usize,
     mask: MaskType,
 
-    fn init(world: *World) ECSError!Self {
+    fn init(world: *World, mask: MaskType) ECSError!Self {
         var it = world.arch_map.iterator();
         const maybe_entry = it.next();
         var entry: *World.ArchetypeMap.Entry = undefined;
@@ -172,7 +172,7 @@ const Iterator = struct {
             .it = it,
             .arch = &entry.value,
             .cursor = 0,
-            .mask = entry.value.mask(),
+            .mask = mask,
         };
     }
 
@@ -360,4 +360,43 @@ test "README example" {
             expect(false);
         }
     }
+}
+
+test "Pong example" {
+    const allocator = std.testing.allocator;
+    const expect = std.testing.expect;
+
+    const Movespeed = struct { speed: u32 };
+    const Position = struct { x: u32, y: u32 };
+    const Size = struct { w: u32, h: u32 };
+    const Velocity = struct { dx: u32, dy: u32 };
+
+    var world = try World.init(allocator, .{ Movespeed, Position, Size, Velocity });
+    defer world.deinit();
+
+    // First paddle
+    const pos1: Position = .{ .x = 1, .y = 1 };
+    const size1: Size = .{ .w = 1, .h = 1 };
+    const speed: Movespeed = .{ .speed = 10 };
+    var ent1 = try world.spawn(.{ speed, pos1, size1 });
+    // Second paddle
+    const pos2: Position = .{ .x = 2, .y = 2 };
+    const size2: Size = .{ .w = 2, .h = 2 };
+    var ent2 = try world.spawn(.{ speed, pos2, size2 });
+    // Ball
+    const pos3: Position = .{ .x = 3, .y = 3 };
+    const size3: Size = .{ .w = 3, .h = 3 };
+    const ball_velocity: Velocity = .{ .dx = 5, .dy = 5 };
+    var ent3 = try world.spawn(.{ pos3, size3 });
+
+    // Should find everything with a Position and a Size
+    var query = try world.query(.{ Position, Size });
+    var i: usize = 0;
+    while (query.next()) {
+        const pos = query.data(Position);
+        const size = query.data(Size);
+
+        i += 1;
+    }
+    expect(i == 3);
 }

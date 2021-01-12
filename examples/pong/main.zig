@@ -4,14 +4,11 @@ const sdl = @import("./sdl.zig");
 const c = sdl.c;
 const ecs = @import("ecs");
 
-const check = sdl.assertZero;
-
-fn renderBlack(renderer: *c.SDL_Renderer) void {
-    check(c.SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255));
-}
-fn renderWhite(renderer: *c.SDL_Renderer) void {
-    check(c.SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255));
-}
+// Component type declarations
+const Movespeed = struct { speed: u32 };
+const Position = struct { x: u32, y: u32 };
+const Size = struct { w: u32, h: u32 };
+const Velocity = struct { dx: u32, dy: u32 };
 
 pub fn main() !void {
     // Game constants
@@ -52,15 +49,10 @@ pub fn main() !void {
     };
     defer c.SDL_DestroyRenderer(renderer);
 
-    // Component type declarations
-    const Movespeed = struct { speed: u32 };
-    const Position = struct { x: u32, y: u32 };
-    const Size = struct { w: u32, h: u32 };
-    const Velocity = struct { dx: u32, dy: u32 };
     // ECS initialization
     var gpa = GeneralPurposeAllocator(.{}){};
     var allocator = &gpa.allocator;
-    var world = try ecs.World.init(allocator, .{ Movespeed, Position, Size, Velocity });
+    var world: *ecs.World = &(try ecs.World.init(allocator, .{ Movespeed, Position, Size, Velocity }));
     defer world.deinit();
 
     // Spawn our entities into the world
@@ -83,7 +75,7 @@ pub fn main() !void {
 }
 
 // Yay main loop time!
-fn doMainLoop(world: ecs.World, renderer: *c.SDL_Renderer) void {
+fn doMainLoop(world: *ecs.World, renderer: *c.SDL_Renderer) void {
     // Helper struct to hold button states
     const ButtonStates = struct { w: bool, s: bool, up: bool, down: bool };
     var states: ButtonStates = .{ .w = false, .s = false, .up = false, .down = false };
@@ -101,13 +93,45 @@ fn doMainLoop(world: ecs.World, renderer: *c.SDL_Renderer) void {
         renderBlack(renderer);
         check(c.SDL_RenderClear(renderer));
 
-        doSystems(&world);
+        doSystems(world, renderer);
 
         c.SDL_RenderPresent(renderer);
         c.SDL_Delay(16);
     }
 }
 
-fn doSystems(world: *ecs.World) void {
-    // TODO
+// Perform all of our lovely ECS-related systems
+fn doSystems(world: *ecs.World, renderer: *c.SDL_Renderer) void {
+    renderSystem(world, renderer);
+}
+
+// Renders all entities with Position and Size components
+fn renderSystem(world: *ecs.World, renderer: *c.SDL_Renderer) void {
+    renderWhite(renderer);
+    var query = world.query(.{ Position, Size }) catch |err| std.debug.panic("Failed to create query, error: {}\n", .{err});
+    while (query.next()) {
+        const pos = query.data(Position);
+        const size = query.data(Size);
+
+        // Icky yucky casting that can't really be avoided
+        const rect: *c.SDL_Rect = &c.SDL_Rect{
+            .x = @intCast(c_int, pos.x),
+            .y = @intCast(c_int, pos.y),
+            .w = @intCast(c_int, size.w),
+            .h = @intCast(c_int, size.h),
+        };
+        check(c.SDL_RenderDrawRect(renderer, rect));
+    }
+}
+
+// General helper/shorthand functions
+fn check(ret: c_int) void {
+    if (ret == 0) return;
+    std.debug.panic("sdl function returned an error: {}", .{c.SDL_GetError()});
+}
+fn renderBlack(renderer: *c.SDL_Renderer) void {
+    check(c.SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255));
+}
+fn renderWhite(renderer: *c.SDL_Renderer) void {
+    check(c.SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255));
 }
