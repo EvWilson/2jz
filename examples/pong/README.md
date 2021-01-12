@@ -1,7 +1,8 @@
 # Pong example
 
-This is my super simple demo to proof-of-concept what using this ECS library
-might look like in a simple game.
+A super simple demo to proof-of-concept what using this ECS library
+might look like in a simple game. Using an ECS library is of course a bit
+overkill for a Pong game, but it gets the idea across well enough.
 
 ### Prerequisites
 

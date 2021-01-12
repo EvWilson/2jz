@@ -1,8 +1,12 @@
 const std = @import("std");
 const GeneralPurposeAllocator = std.heap.GeneralPurposeAllocator;
-const sdl = @import("./sdl.zig");
-const c = sdl.c;
 const ecs = @import("ecs");
+
+// Some minimal boilerplate to get access to SDL
+pub const SDL_WINDOWPOS_UNDEFINED = @bitCast(c_int, c.SDL_WINDOWPOS_UNDEFINED_MASK);
+pub const c = @cImport({
+    @cInclude("SDL2/SDL.h");
+});
 
 // Component type declarations
 const Movespeed = struct { speed: u32 };
@@ -35,8 +39,8 @@ pub fn main() !void {
     // Create the game screen and renderer
     const screen: *c.SDL_Window = c.SDL_CreateWindow(
         "Pong",
-        sdl.SDL_WINDOWPOS_UNDEFINED,
-        sdl.SDL_WINDOWPOS_UNDEFINED,
+        SDL_WINDOWPOS_UNDEFINED,
+        SDL_WINDOWPOS_UNDEFINED,
         SCREEN_WIDTH,
         SCREEN_HEIGHT,
         c.SDL_WINDOW_RESIZABLE,
