@@ -12,31 +12,31 @@ pub const c = @cImport({
 // SDL_video.h:#define SDL_WINDOWPOS_UNDEFINED         SDL_WINDOWPOS_UNDEFINED_DISPLAY(0)
 // SDL_video.h:#define SDL_WINDOWPOS_UNDEFINED_DISPLAY(X)  (SDL_WINDOWPOS_UNDEFINED_MASK|(X))
 // SDL_video.h:#define SDL_WINDOWPOS_UNDEFINED_MASK    0x1FFF0000u
-pub const SDL_WINDOWPOS_UNDEFINED = @bitCast(c_int, sdl.c.SDL_WINDOWPOS_UNDEFINED_MASK);
+pub const SDL_WINDOWPOS_UNDEFINED = @bitCast(c_int, c.SDL_WINDOWPOS_UNDEFINED_MASK);
 
-pub extern fn SDL_PollEvent(event: *sdl.c.SDL_Event) c_int;
+pub extern fn SDL_PollEvent(event: *c.SDL_Event) c_int;
 
 pub extern fn SDL_RenderCopy(
-    renderer: *sdl.c.SDL_Renderer,
-    texture: *sdl.c.SDL_Texture,
-    srcrect: ?*const sdl.c.SDL_Rect,
-    dstrect: ?*const sdl.c.SDL_Rect,
+    renderer: *c.SDL_Renderer,
+    texture: *c.SDL_Texture,
+    srcrect: ?*const c.SDL_Rect,
+    dstrect: ?*const c.SDL_Rect,
 ) c_int;
 
 pub extern fn SDL_RenderCopyEx(
-    renderer: *sdl.c.SDL_Renderer,
-    texture: *sdl.c.SDL_Texture,
-    srcrect: ?*const sdl.c.SDL_Rect,
-    dstrect: ?*const sdl.c.SDL_Rect,
+    renderer: *c.SDL_Renderer,
+    texture: *c.SDL_Texture,
+    srcrect: ?*const c.SDL_Rect,
+    dstrect: ?*const c.SDL_Rect,
     angle: f64,
-    center: ?*const sdl.c.SDL_Point,
+    center: ?*const c.SDL_Point,
     flip: c_int, // SDL_RendererFlip
 ) c_int;
 
 pub fn assertZero(ret: c_int) void {
     if (ret == 0) return;
-    std.debug.panic("sdl function returned an error: {c}", .{sdl.c.SDL_GetError()});
+    std.debug.panic("sdl function returned an error: {}", .{c.SDL_GetError()});
 }
 
-pub const Renderer = sdl.c.SDL_Renderer;
-pub const Texture = sdl.c.SDL_Texture;
+pub const Renderer = c.SDL_Renderer;
+pub const Texture = c.SDL_Texture;
