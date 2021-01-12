@@ -17,7 +17,7 @@ const ECSError = error{ BadSpawn, InvalidIterator, NoSuchEntity };
 
 // The main encompassing struct for the library, its methods are effectively the
 // API to the library.
-const World = struct {
+pub const World = struct {
     const Self = @This();
     const DEFAULT_CAPACITY = 1024;
     const ArchetypeMap = AutoHashMap(MaskType, Archetype);
