@@ -16,6 +16,7 @@ pub fn build(b: *Builder) void {
     demo.setBuildMode(mode);
     demo.linkSystemLibrary("c");
     demo.linkSystemLibrary("sdl2");
+    demo.linkSystemLibrary("SDL2_ttf");
     demo.addPackagePath("ecs", "../../src/world.zig");
     demo.install();
 

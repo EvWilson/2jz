@@ -187,12 +187,13 @@ pub fn ArchetypeGen(comptime Bundle: type) type {
 
     const SizeCalc = struct {
         fn offset(name: []const u8) u32 {
-            comptime var size = 0;
+            comptime var ret = 0;
             inline for (info.Struct.fields) |field, idx| {
                 if (std.mem.eql(u8, name, field.name)) {
-                    return size;
+                    return ret;
                 }
-                size += @sizeOf(@TypeOf(field.default_value.?));
+                comptime var size = @sizeOf(@TypeOf(field.default_value.?));
+                ret += size;
             }
             // This should not be reached. If it is, it means the archetype was
             //  passed a type name it does not contain
@@ -225,11 +226,9 @@ pub fn ArchetypeGen(comptime Bundle: type) type {
             result.mask = mask_val;
             comptime var total_size = 0;
             inline for (info.Struct.fields) |field, idx| {
-                const size = @sizeOf(@TypeOf(field.default_value.?));
-                std.debug.print("field name: {s}, size: {}\n", .{ field.name, size });
+                comptime var size = @sizeOf(@TypeOf(field.default_value.?));
                 total_size += size;
             }
-            std.debug.print("total size: {}\n", .{total_size});
             result.bundle_size = total_size;
             result.type_mem = try alloc.alloc(u8, result.bundle_size * result.capacity);
             return result;
