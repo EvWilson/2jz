@@ -226,8 +226,10 @@ pub fn ArchetypeGen(comptime Bundle: type) type {
             comptime var total_size = 0;
             inline for (info.Struct.fields) |field, idx| {
                 const size = @sizeOf(@TypeOf(field.default_value.?));
+                std.debug.print("field name: {s}, size: {}\n", .{ field.name, size });
                 total_size += size;
             }
+            std.debug.print("total size: {}\n", .{total_size});
             result.bundle_size = total_size;
             result.type_mem = try alloc.alloc(u8, result.bundle_size * result.capacity);
             return result;

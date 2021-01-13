@@ -2,6 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const AutoHashMap = std.AutoHashMap;
 const ArrayList = std.ArrayList;
+const StringHashMap = std.StringHashMap;
 
 const comptime_utils = @import("./comptime_utils.zig");
 const MaskType = comptime_utils.MaskType;
@@ -25,7 +26,7 @@ pub const World = struct {
     allocator: *Allocator,
     arch_map: ArchetypeMap,
     capacity: usize,
-    mask_map: AutoHashMap([]const u8, MaskType),
+    mask_map: StringHashMap(MaskType),
     entities: Entities,
 
     pub fn init(allocator: *Allocator, comptime registry: anytype) !Self {
@@ -33,7 +34,7 @@ pub const World = struct {
     }
 
     pub fn initCapacity(allocator: *Allocator, capacity: usize, comptime registry: anytype) !Self {
-        var comp_map = AutoHashMap([]const u8, MaskType).init(allocator);
+        var comp_map = StringHashMap(MaskType).init(allocator);
         comptime var mask_val = 1;
         inline for (registry) |ty| {
             try comp_map.put(@typeName(ty), mask_val);
@@ -218,14 +219,15 @@ const Iterator = struct {
     // Get data from the current query index that cannot mutate the archetype's
     // memory
     pub fn data(self: *Self, comptime T: type) T {
-        const type_ptr = self.arch.typeAt(@typeName(T), self.cursor - 1);
+        const type_ptr: usize = self.arch.typeAt(@typeName(T), self.cursor - 1);
+        std.debug.print("type_ptr: {x}, T typename: {s}, align of T: {}\n", .{ type_ptr, @typeName(T), @alignOf(T) });
         return @intToPtr(*T, type_ptr).*;
     }
 
     // Get data from the current query index that can mutate the archetype's
     // memory
     pub fn dataMut(self: *Self, comptime T: type) *T {
-        const type_ptr = self.arch.typeAt(@typeName(T), self.cursor - 1);
+        const type_ptr: usize = self.arch.typeAt(@typeName(T), self.cursor - 1);
         return @intToPtr(*T, type_ptr);
     }
 
@@ -338,6 +340,7 @@ test "query test" {
     }
 }
 
+// More integration test style tests from here on down
 test "README example" {
     const allocator = std.testing.allocator;
     const expect = std.testing.expect;
@@ -408,4 +411,23 @@ test "Pong example" {
         i += 1;
     }
     expect(i == 3);
+}
+
+test "off-alignment" {
+    const allocator = std.testing.allocator;
+    const expect = std.testing.expect;
+
+    const A = struct { value: u8 };
+    const B = struct { value: u32 };
+
+    var world = try World.init(allocator, .{ A, B });
+    defer world.deinit();
+
+    var ent1 = try world.spawn(.{ A{ .value = 1 }, B{ .value = 2 } });
+
+    var query = try world.query(.{ A, B });
+    while (query.next()) {
+        const a = query.data(A);
+        const b = query.data(B);
+    }
 }

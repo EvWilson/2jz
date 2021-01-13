@@ -27,7 +27,7 @@ const BALL_HEIGHT = SCREEN_WIDTH / 20;
 const PADDLE_WIDTH = SCREEN_WIDTH / 30;
 const PADDLE_HEIGHT = SCREEN_HEIGHT / 5;
 const PADDLE_SPEED: i32 = 10;
-const MAX_SCORE: usize = 5;
+const MAX_SCORE: usize = 500;
 
 // TODO: systemize this
 var PLAYER1_SCORE: usize = 0;
@@ -68,24 +68,24 @@ pub fn main() !void {
     // ECS initialization
     var gpa = GeneralPurposeAllocator(.{}){};
     var allocator = &gpa.allocator;
-    var world: *ecs.World = &(try ecs.World.init(allocator, .{ Id, Movespeed, Position, Size, Velocity }));
+    var world: *ecs.World = &(try ecs.World.init(allocator, .{ Id, Movespeed, Position, Score, Size, Velocity }));
     defer world.deinit();
 
     // Spawn our entities into the world
     // First paddle
     const id1: Id = .{ .id = 1 };
     const pos1: Position = .{ .x = PADDLE_WIDTH / 2, .y = SCREEN_HEIGHT / 2 };
-    //const score1: Score = .{ .value = 0 };
+    const score1: Score = .{ .value = 0 };
     const size1: Size = .{ .w = PADDLE_WIDTH, .h = PADDLE_HEIGHT };
     const speed: Movespeed = .{ .speed = PADDLE_SPEED };
-    var paddle1_ent = try world.spawn(.{ id1, speed, pos1, size1 });
+    var paddle1_ent = try world.spawn(.{ id1, speed, pos1, score1, size1 });
     std.debug.print("first paddle entity: {}\n", .{paddle1_ent});
     // Second paddle
     const id2: Id = .{ .id = 2 };
     const pos2: Position = .{ .x = SCREEN_WIDTH - (PADDLE_WIDTH * 1.5), .y = (SCREEN_HEIGHT / 2) - (PADDLE_HEIGHT / 2) };
-    //const score2: Score = .{ .value = 0 };
+    const score2: Score = .{ .value = 0 };
     const size2: Size = .{ .w = PADDLE_WIDTH, .h = PADDLE_HEIGHT };
-    var paddle2_ent = try world.spawn(.{ id2, speed, pos2, size2 });
+    var paddle2_ent = try world.spawn(.{ id2, speed, pos2, score2, size2 });
     std.debug.print("second paddle entity: {}\n", .{paddle2_ent});
     // Ball
     const pos3: Position = .{ .x = SCREEN_WIDTH / 2, .y = (SCREEN_HEIGHT / 2) - (PADDLE_HEIGHT / 2) };
@@ -158,7 +158,7 @@ fn doMainLoop(world: *ecs.World, renderer: *c.SDL_Renderer) void {
 fn doSystems(world: *ecs.World, renderer: *c.SDL_Renderer, buttons: *const ButtonStates) void {
     movementSystem(world, buttons);
     transformSystem(world);
-    //collisionSystem(world);
+    collisionSystem(world);
     scoreSystem(world);
     renderSystem(world, renderer);
 }
@@ -255,7 +255,7 @@ fn renderSystem(world: *ecs.World, renderer: *c.SDL_Renderer) void {
 // General helper/shorthand functions
 fn check(ret: c_int) void {
     if (ret == 0) return;
-    std.debug.panic("sdl function returned an error: {}", .{c.SDL_GetError()});
+    std.debug.panic("SDL function returned an error: {}\n", .{c.SDL_GetError()});
 }
 fn renderBlack(renderer: *c.SDL_Renderer) void {
     check(c.SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255));
