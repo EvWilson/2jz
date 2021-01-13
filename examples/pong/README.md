@@ -16,6 +16,7 @@ Pop!_OS 20.10. You have been warned.
 From within this directory, run `zig build demo`
 
 TODO:
-handle w/s up/down input events
-movement system, probably will have to have paddles and ball separate
+collisions
 scorekeeping and exiting
+
+REMINDER: find out about usize alignment issue that popped up, create test

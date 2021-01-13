@@ -6,6 +6,7 @@ const TypeInfo = std.builtin.TypeInfo;
 const comptime_utils = @import("./comptime_utils.zig");
 const MaskType = comptime_utils.MaskType;
 const IdType = comptime_utils.IdType;
+const Entity = @import("./entities.zig").Entity;
 
 // Inspired by Alex Naskos' Runtime Polymorphism talk, 14:53
 // This is entirely a proxy object for types returned by ArchetypeGen below,
@@ -16,10 +17,10 @@ pub const Archetype = struct {
     const VTable = struct {
         cursor: fn (usize) usize,
         deinit: fn (usize) void,
-        idAt: fn (usize, usize) IdType,
+        entityAt: fn (usize, usize) Entity,
         mask: fn (usize) MaskType,
-        put: fn (usize, IdType, usize) bool,
-        remove: fn (usize, IdType) bool,
+        put: fn (usize, Entity, usize) bool,
+        remove: fn (usize, Entity) bool,
         typeAt: fn (usize, []const u8, usize) usize,
         // For diagnostic purposes
         printAt: fn (usize, usize) void,
@@ -36,20 +37,20 @@ pub const Archetype = struct {
         self.vtable.deinit(self.object);
     }
 
-    pub fn idAt(self: @This(), idx: usize) IdType {
-        return self.vtable.idAt(self.object, idx);
+    pub fn entityAt(self: @This(), idx: usize) Entity {
+        return self.vtable.entityAt(self.object, idx);
     }
 
     pub fn mask(self: @This()) MaskType {
         return self.vtable.mask(self.object);
     }
 
-    pub fn put(self: @This(), id: IdType, bundle_ptr: usize) bool {
-        return self.vtable.put(self.object, id, bundle_ptr);
+    pub fn put(self: @This(), entity: Entity, bundle_ptr: usize) bool {
+        return self.vtable.put(self.object, entity, bundle_ptr);
     }
 
-    pub fn remove(self: @This(), id: IdType) bool {
-        return self.vtable.remove(self.object, id);
+    pub fn remove(self: @This(), entity: Entity) bool {
+        return self.vtable.remove(self.object, entity);
     }
 
     pub fn typeAt(self: @This(), typename: []const u8, elem_idx: usize) usize {
@@ -86,12 +87,12 @@ pub const Archetype = struct {
                         @call(.{ .modifier = .always_inline }, std.meta.Child(PtrType).deinit, .{self});
                     }
                 }.deinit,
-                .idAt = struct {
-                    fn idAt(ptr: usize, idx: usize) IdType {
+                .entityAt = struct {
+                    fn entityAt(ptr: usize, idx: usize) Entity {
                         const self = @intToPtr(PtrType, ptr);
-                        return @call(.{ .modifier = .always_inline }, std.meta.Child(PtrType).idAt, .{ self, idx });
+                        return @call(.{ .modifier = .always_inline }, std.meta.Child(PtrType).entityAt, .{ self, idx });
                     }
-                }.idAt,
+                }.entityAt,
                 .mask = struct {
                     fn mask(ptr: usize) MaskType {
                         const self = @intToPtr(PtrType, ptr);
@@ -99,16 +100,16 @@ pub const Archetype = struct {
                     }
                 }.mask,
                 .put = struct {
-                    fn put(ptr: usize, id: IdType, bundle_ptr: usize) bool {
+                    fn put(ptr: usize, entity: Entity, bundle_ptr: usize) bool {
                         const self = @intToPtr(PtrType, ptr);
                         const bundle: *Bundle = @intToPtr(*Bundle, bundle_ptr);
-                        return @call(.{ .modifier = .always_inline }, std.meta.Child(PtrType).put, .{ self, id, bundle.* });
+                        return @call(.{ .modifier = .always_inline }, std.meta.Child(PtrType).put, .{ self, entity, bundle.* });
                     }
                 }.put,
                 .remove = struct {
-                    fn remove(ptr: usize, id: IdType) bool {
+                    fn remove(ptr: usize, entity: Entity) bool {
                         const self = @intToPtr(PtrType, ptr);
-                        return @call(.{ .modifier = .always_inline }, std.meta.Child(PtrType).remove, .{ self, id });
+                        return @call(.{ .modifier = .always_inline }, std.meta.Child(PtrType).remove, .{ self, entity });
                     }
                 }.remove,
                 .typeAt = struct {
@@ -156,7 +157,7 @@ test "vtable" {
 
     // `put`
     const add: Bundle = .{ .Point = p, .Velocity = v };
-    expect(dyn.put(0, @ptrToInt(&add)));
+    expect(dyn.put(.{ .id = 0, .location = 1 }, @ptrToInt(&add)));
 
     // `typeAt` - ensure the produced reference can mutate the archetype memory
     // Point
@@ -195,8 +196,7 @@ pub fn ArchetypeGen(comptime Bundle: type) type {
             }
             // This should not be reached. If it is, it means the archetype was
             //  passed a type name it does not contain
-            std.debug.assert(false);
-            return 0;
+            std.debug.panic("Archetype passed a typename it did not contain: {}\n", .{name});
         }
     };
 
@@ -211,7 +211,7 @@ pub fn ArchetypeGen(comptime Bundle: type) type {
         capacity: usize,
         // Points to next available mem for bundles
         cursor: u32,
-        entities: []IdType,
+        entities: []Entity,
         mask: MaskType,
         // Memory to hold data
         type_mem: []u8,
@@ -221,7 +221,7 @@ pub fn ArchetypeGen(comptime Bundle: type) type {
             result.allocator = alloc;
             result.capacity = capacity;
             result.cursor = 0;
-            result.entities = try alloc.alloc(IdType, capacity);
+            result.entities = try alloc.alloc(Entity, capacity);
             result.mask = mask_val;
             comptime var total_size = 0;
             inline for (info.Struct.fields) |field, idx| {
@@ -240,7 +240,7 @@ pub fn ArchetypeGen(comptime Bundle: type) type {
         }
 
         // Stores the given bundle into the archetype
-        fn put(self: *Self, id: IdType, bundle: Bundle) bool {
+        fn put(self: *Self, entity: Entity, bundle: Bundle) bool {
             if (self.cursor == self.capacity) {
                 self.grow() catch return false;
             }
@@ -254,7 +254,7 @@ pub fn ArchetypeGen(comptime Bundle: type) type {
                 std.mem.copy(u8, dest_slice, field_bytes);
                 dest_slice.ptr += field_bytes.len;
             }
-            self.entities[self.cursor] = id;
+            self.entities[self.cursor] = entity;
             self.cursor += 1;
             return true;
         }
@@ -268,16 +268,16 @@ pub fn ArchetypeGen(comptime Bundle: type) type {
             return elem_start + offset;
         }
 
-        // Returns the id of the entity data stored at the given index
-        fn idAt(self: *Self, idx: usize) IdType {
+        // Returns the entity data stored at the given index
+        fn entityAt(self: *Self, idx: usize) Entity {
             return self.entities[idx];
         }
 
         // Remove the given entity id
-        fn remove(self: *Self, id: IdType) bool {
+        fn remove(self: *Self, entity: Entity) bool {
             var idx: usize = 0;
             while (idx != self.cursor + 1) : (idx += 1) {
-                if (self.entities[idx] == id) {
+                if (self.entities[idx].id == entity.id) {
                     self.removeIdx(idx);
                     return true;
                 }
@@ -363,7 +363,7 @@ test "basic" {
 
     // `put` testing
     expect(arch.cursor == 0);
-    expect(arch.put(0, .{ .Point = p, .Velocity = v }));
+    expect(arch.put(.{ .id = 0, .location = 1 }, .{ .Point = p, .Velocity = v }));
     expect(arch.cursor == 1);
 
     // Get with type
@@ -403,14 +403,14 @@ test "storage resizing" {
     defer arch.deinit();
 
     // Spawned: 1, cap: 1
-    expect(arch.put(0, .{ .Point = .{ .x = 1, .y = 1 }, .Velocity = .{ .dir = 1, .magnitude = 1 } }));
+    expect(arch.put(.{ .id = 0, .location = 1 }, .{ .Point = .{ .x = 1, .y = 1 }, .Velocity = .{ .dir = 1, .magnitude = 1 } }));
     const pt = @intToPtr(*Point, arch.typeAt(@typeName(Point), 0));
     expect(pt.x == 1 and pt.y == 1);
     const vel = @intToPtr(*Velocity, arch.typeAt(@typeName(Velocity), 0));
     expect(vel.dir == 1 and vel.magnitude == 1);
 
     // Spawned: 2, cap: 1 -> 2
-    expect(arch.put(1, .{ .Point = .{ .x = 2, .y = 2 }, .Velocity = .{ .dir = 2, .magnitude = 2 } }));
+    expect(arch.put(.{ .id = 1, .location = 1 }, .{ .Point = .{ .x = 2, .y = 2 }, .Velocity = .{ .dir = 2, .magnitude = 2 } }));
     const pt2 = @intToPtr(*Point, arch.typeAt(@typeName(Point), 1));
     expect(pt2.x == 2 and pt2.y == 2);
     const vel2 = @intToPtr(*Velocity, arch.typeAt(@typeName(Velocity), 1));
@@ -422,7 +422,7 @@ test "storage resizing" {
     expect(vel1.dir == 1 and vel1.magnitude == 1);
 
     // Spawned: 3, cap: 2 -> 4
-    expect(arch.put(2, .{ .Point = .{ .x = 3, .y = 3 }, .Velocity = .{ .dir = 3, .magnitude = 3 } }));
+    expect(arch.put(.{ .id = 2, .location = 1 }, .{ .Point = .{ .x = 3, .y = 3 }, .Velocity = .{ .dir = 3, .magnitude = 3 } }));
     const pt3 = @intToPtr(*Point, arch.typeAt(@typeName(Point), 2));
     expect(pt3.x == 3 and pt3.y == 3);
     const vel3 = @intToPtr(*Velocity, arch.typeAt(@typeName(Velocity), 2));

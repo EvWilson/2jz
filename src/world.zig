@@ -9,7 +9,7 @@ const arch_file = @import("./archetype.zig");
 const Archetype = arch_file.Archetype;
 const ArchetypeGen = arch_file.ArchetypeGen;
 const ent_file = @import("./entities.zig");
-const Entity = ent_file.Entity;
+pub const Entity = ent_file.Entity;
 const Entities = ent_file.Entities;
 
 // Possible errors that can arise from operation
@@ -69,12 +69,12 @@ pub const World = struct {
         const bundle = comptime_utils.coerceToBundle(BundleType, args);
         const ent = try self.entities.alloc(mask);
         if (self.arch_map.get(mask)) |arch| {
-            if (!arch.put(ent.id, @ptrToInt(&bundle))) {
+            if (!arch.put(ent, @ptrToInt(&bundle))) {
                 return ECSError.BadSpawn;
             }
         } else {
             var dyn = try Archetype.make(BundleType, mask, self.allocator, self.capacity);
-            if (!dyn.put(ent.id, @ptrToInt(&bundle))) {
+            if (!dyn.put(ent, @ptrToInt(&bundle))) {
                 return ECSError.BadSpawn;
             }
             try self.arch_map.put(mask, dyn);
@@ -94,7 +94,7 @@ pub const World = struct {
     pub fn remove(self: *Self, entity: Entity) bool {
         var maybe_arch = self.arch_map.get(entity.location);
         if (maybe_arch) |arch| {
-            return arch.remove(entity.id);
+            return arch.remove(entity);
         } else {
             return false;
         }
@@ -159,14 +159,23 @@ const Iterator = struct {
     cursor: usize,
     mask: MaskType,
 
+    // Create a new Iterator for a query
     fn init(world: *World, mask: MaskType) ECSError!Self {
         var it = world.arch_map.iterator();
-        const maybe_entry = it.next();
         var entry: *World.ArchetypeMap.Entry = undefined;
-        if (maybe_entry) |entry_ref| {
-            entry = entry_ref;
-        } else {
-            return ECSError.InvalidIterator;
+        // This section tries to find the first Archetype to reference with a
+        // compatible bitmask. If there is no matching Archetype, you get the
+        // InvalidIterator error instead.
+        var matched: bool = false;
+        while (!matched) {
+            if (it.next()) |entry_ref| {
+                if (entry_ref.value.mask() & mask == mask) {
+                    entry = entry_ref;
+                    matched = true;
+                }
+            } else {
+                return ECSError.InvalidIterator;
+            }
         }
         return Self{
             .it = it,
@@ -197,10 +206,10 @@ const Iterator = struct {
             if (self.mask == self.mask & entry.value.mask()) {
                 self.mask = entry.value.mask();
                 self.arch = &entry.value;
+                return true;
             } else {
                 return self.nextArch();
             }
-            return true;
         } else {
             return false;
         }
@@ -222,7 +231,7 @@ const Iterator = struct {
 
     // Reconstruct an Entity from a query entry (used in removal)
     pub fn entity(self: *Self) Entity {
-        return .{ .id = self.arch.idAt(self.cursor - 1), .location = self.mask };
+        return self.arch.entityAt(self.cursor - 1);
     }
 };
 
