@@ -412,24 +412,31 @@ test "Pong example" {
     expect(i == 3);
 }
 
-// TODO: handle cases that off-align the rest of the structure, as below
-//test "off-alignment" {
-//    const allocator = std.testing.allocator;
-//    const expect = std.testing.expect;
-//
-//    const A = struct { value: u8 };
-//    const B = struct { value: u32 };
-//
-//    var world = try World.init(allocator, .{ A, B });
-//    defer world.deinit();
-//
-//    var ent1 = try world.spawn(.{ A{ .value = 1 }, B{ .value = 2 } });
-//
-//    var query = try world.query(.{ A, B });
-//    while (query.next()) {
-//        const a = query.data(A);
-//        expect(a.value == 1);
-//        const b = query.data(B);
-//        expect(b.value == 2);
-//    }
-//}
+// Make sure we handle cases that off-align the rest of the structure, as below
+test "off-alignment" {
+    const allocator = std.testing.allocator;
+    const expect = std.testing.expect;
+
+    const A = struct { value: u8 };
+    const B = struct { value: u32 };
+
+    var world = try World.init(allocator, .{ B, A });
+    defer world.deinit();
+
+    var ent1 = try world.spawn(.{ A{ .value = 2 }, B{ .value = 1 } });
+    var ent2 = try world.spawn(.{ A{ .value = 4 }, B{ .value = 3 } });
+
+    var query = try world.query(.{ A, B });
+
+    expect(query.next());
+    var a = query.data(A);
+    expect(a.value == 2);
+    var b = query.data(B);
+    expect(b.value == 1);
+
+    expect(query.next());
+    a = query.data(A);
+    expect(a.value == 4);
+    b = query.data(B);
+    expect(b.value == 3);
+}

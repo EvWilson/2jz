@@ -22,8 +22,6 @@ pub const Archetype = struct {
         put: fn (usize, Entity, usize) bool,
         remove: fn (usize, Entity) bool,
         typeAt: fn (usize, []const u8, usize) usize,
-        // For diagnostic purposes
-        printAt: fn (usize, usize) void,
     };
     alloc: *Allocator,
     vtable: *const VTable,
@@ -55,10 +53,6 @@ pub const Archetype = struct {
 
     pub fn typeAt(self: @This(), typename: []const u8, elem_idx: usize) usize {
         return self.vtable.typeAt(self.object, typename, elem_idx);
-    }
-
-    pub fn printAt(self: @This(), idx: usize) void {
-        self.vtable.printAt(self.object, idx);
     }
 
     // This function and the one below are what set up the dynamic reference to
@@ -119,13 +113,6 @@ pub const Archetype = struct {
                         return ret_ptr;
                     }
                 }.typeAt,
-
-                .printAt = struct {
-                    fn printAt(ptr: usize, idx: usize) void {
-                        const self = @intToPtr(PtrType, ptr);
-                        @call(.{ .modifier = .always_inline }, std.meta.Child(PtrType).printAt, .{ self, idx });
-                    }
-                }.printAt,
             },
             .object = @ptrToInt(arch),
         };
@@ -161,20 +148,17 @@ test "vtable" {
 
     // `typeAt` - ensure the produced reference can mutate the archetype memory
     // Point
-    const point_ptr: usize = dyn.typeAt(@typeName(Point), 0);
-    const point: *Point = @intToPtr(*Point, point_ptr);
+    var point_ptr: usize = dyn.typeAt(@typeName(Point), 0);
+    var point: *Point = @intToPtr(*Point, point_ptr);
     expect(point.x == 1);
     expect(point.y == 2);
     point.x += 10;
     expect(point.x == 11);
     expect(point.y == 2);
-    // Check first 4 bytes of memory (Point x) to make sure it's mutated
-    var i: usize = 0;
-    var total: usize = 0;
-    while (i < 4) : (i += 1) {
-        total += arch.type_mem[i];
-    }
-    expect(total == 11);
+    point_ptr = dyn.typeAt(@typeName(Point), 0);
+    point = @intToPtr(*Point, point_ptr);
+    expect(point.x == 11);
+    expect(point.y == 2);
     // Velocity
     const vel_ptr: usize = arch.typeAt(@typeName(Velocity), 0);
     const vel: *Velocity = @intToPtr(*Velocity, vel_ptr);
@@ -206,8 +190,6 @@ pub fn ArchetypeGen(comptime Bundle: type) type {
         const DEFAULT_CAPACITY = 1024;
 
         allocator: *Allocator,
-        // Total size of all structs in the arch
-        bundle_size: u32,
         // Number of bundles arch can currently hold
         capacity: usize,
         // Points to next available mem for bundles
@@ -215,7 +197,7 @@ pub fn ArchetypeGen(comptime Bundle: type) type {
         entities: []Entity,
         mask: MaskType,
         // Memory to hold data
-        type_mem: []u8,
+        type_mem: []Bundle,
 
         fn initCapacity(mask_val: MaskType, alloc: *Allocator, capacity: usize) !*Self {
             var result: *Self = try alloc.create(Self);
@@ -224,13 +206,7 @@ pub fn ArchetypeGen(comptime Bundle: type) type {
             result.cursor = 0;
             result.entities = try alloc.alloc(Entity, capacity);
             result.mask = mask_val;
-            comptime var total_size = 0;
-            inline for (info.Struct.fields) |field, idx| {
-                comptime var size = @sizeOf(@TypeOf(field.default_value.?));
-                total_size += size;
-            }
-            result.bundle_size = total_size;
-            result.type_mem = try alloc.alloc(u8, result.bundle_size * result.capacity);
+            result.type_mem = try alloc.alloc(Bundle, result.capacity);
             return result;
         }
 
@@ -245,28 +221,19 @@ pub fn ArchetypeGen(comptime Bundle: type) type {
             if (self.cursor == self.capacity) {
                 self.grow() catch return false;
             }
-            comptime var offset = 0;
-            const field_info = @typeInfo(@TypeOf(bundle));
-            var dest_slice = self.type_mem;
-            dest_slice.ptr += self.cursor * self.bundle_size;
-
-            inline for (field_info.Struct.fields) |field, idx| {
-                const field_bytes = std.mem.asBytes(&@field(bundle, field.name));
-                std.mem.copy(u8, dest_slice, field_bytes);
-                dest_slice.ptr += field_bytes.len;
-            }
+            self.type_mem[self.cursor] = bundle;
             self.entities[self.cursor] = entity;
             self.cursor += 1;
             return true;
         }
 
         // Returns the address of the piece of data requested
-        // Must be typecast back to the desired type, left as an exercise for
+        // Must be typecast back to the desired type, left as a responsibility for
         // higher-level mechanisms
         fn typeAt(self: *Self, typename: []const u8, elem_idx: usize) usize {
             const offset = SizeCalc.offset(typename);
-            const elem_start = @ptrToInt(self.type_mem.ptr) + (elem_idx * self.bundle_size);
-            return elem_start + offset;
+            const bundle: *Bundle = &self.type_mem[elem_idx];
+            return @ptrToInt(bundle) + offset;
         }
 
         // Returns the entity data stored at the given index
@@ -290,13 +257,7 @@ pub fn ArchetypeGen(comptime Bundle: type) type {
         // Copies bundle at end of array to indicated location and decrements
         // cursor
         fn removeIdx(self: *Self, idx: usize) void {
-            var dest_slice: []u8 = self.type_mem;
-            dest_slice.ptr += idx * self.bundle_size;
-            dest_slice.len = self.bundle_size;
-            var src_slice: []u8 = self.type_mem;
-            src_slice.ptr += self.cursor * self.bundle_size;
-            src_slice.len = self.bundle_size;
-            std.mem.copy(u8, dest_slice, src_slice);
+            self.type_mem[idx] = self.type_mem[self.cursor];
             self.entities[idx] = self.entities[self.cursor];
             self.cursor -= 1;
         }
@@ -322,23 +283,9 @@ pub fn ArchetypeGen(comptime Bundle: type) type {
         // Increase the storage size once needed
         fn grow(self: *Self) !void {
             const new_cap = self.capacity * 2;
-            self.type_mem = try self.allocator.realloc(self.type_mem, new_cap * self.bundle_size);
+            self.type_mem = try self.allocator.realloc(self.type_mem, new_cap);
             self.entities = try self.allocator.realloc(self.entities, new_cap);
             self.capacity = new_cap;
-        }
-
-        // Diagnostic methods section
-        fn printAt(self: *Self, idx: usize) void {
-            std.debug.print("arch type mem @[{}]: ", .{idx});
-            var i: usize = 0;
-            while (i < self.bundle_size) : (i += 1) {
-                std.debug.print("{} ", .{self.type_mem[idx * self.bundle_size + i]});
-            }
-            std.debug.print("\n", .{});
-        }
-
-        fn printInfo(self: *Self) void {
-            std.debug.print("capacity: {}, cursor: {}, bundle size: {}\n", .{ self.capacity, self.cursor, self.bundle_size });
         }
     };
 }
@@ -369,20 +316,17 @@ test "basic" {
 
     // Get with type
     // Point
-    const point_ptr: usize = arch.typeAt(@typeName(Point), 0);
-    const point: *Point = @intToPtr(*Point, point_ptr);
+    var point_ptr: usize = arch.typeAt(@typeName(Point), 0);
+    var point: *Point = @intToPtr(*Point, point_ptr);
     expect(point.x == 1);
     expect(point.y == 2);
     point.x += 10;
     expect(point.x == 11);
     expect(point.y == 2);
-    // Check first 4 bytes of memory (Point x) to make sure it's mutated
-    var i: usize = 0;
-    var total: usize = 0;
-    while (i < 4) : (i += 1) {
-        total += arch.type_mem[i];
-    }
-    expect(total == 11);
+    point_ptr = arch.typeAt(@typeName(Point), 0);
+    point = @intToPtr(*Point, point_ptr);
+    expect(point.x == 11);
+    expect(point.y == 2);
     // Velocity
     const vel_ptr: usize = arch.typeAt(@typeName(Velocity), 0);
     const vel: *Velocity = @intToPtr(*Velocity, vel_ptr);

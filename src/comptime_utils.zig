@@ -7,17 +7,65 @@ pub const MaskType = u64;
 // The type used for entity IDs
 pub const IdType = u32;
 
+// Used to sort the constituent structs in the below typeFromBundle function
+const SizeInfo = struct {
+    size: comptime_int,
+    idx: comptime_int,
+};
+// This function used for the failed sorting attempt, see comment about std.sort.sort below
+//fn sizeInfoSort(context: void, comptime lhs: SizeInfo, comptime rhs: SizeInfo) bool {
+//    return rhs.size < lhs.size;
+//}
 // Create a distinct type from a tuple of structs
+// Expects to receive a tuple of types or structs, produces a struct type with
+// each of the provided types as a field.
+// Safety note: it is expected that the format of the provided tuple is checked
+// in another function to ensure it is processable.
 pub fn typeFromBundle(comptime comp_types: anytype) type {
     const info = @typeInfo(@TypeOf(comp_types));
     const field_len = info.Struct.fields.len;
+    // Determine if we're operating on types or structs
     const is_types = if (@TypeOf(comp_types[0]) == type) true else false;
+
+    // Sort the types provided by size, in descending order. This helps to avoid
+    // alignment issues when dereferencing type addresses down the road.
+    comptime var size_sorted: [info.Struct.fields.len]SizeInfo = undefined;
+    inline for (info.Struct.fields) |field, idx| {
+        comptime var field_type: type = undefined;
+        if (is_types) {
+            field_type = comp_types[idx];
+        } else {
+            field_type = @TypeOf(comp_types[idx]);
+        }
+        size_sorted[idx] = .{ .size = @sizeOf(field_type), .idx = idx };
+    }
+    // Using std.sort.sort on the size_sorted array yields a compiler error at
+    // the moment (very sad), so I'm resorting to a basic selection sort. Don't
+    // anticipate this being an issue, as the max N here is bounded by the bit
+    // count of MaskType
+    // The previous attempt, for when the stage2 compiler lands:
+    // std.sort.sort(SizeInfo, &size_sorted, {}, sizeInfoSort);
+    comptime var i = 0;
+    while (i < info.Struct.fields.len) : (i += 1) {
+        comptime var min_idx = i;
+        comptime var j = i + 1;
+        while (j < info.Struct.fields.len) : (j += 1) {
+            if (size_sorted[min_idx].size < size_sorted[j].size) {
+                min_idx = j;
+            }
+        }
+        const tmp: SizeInfo = size_sorted[min_idx];
+        size_sorted[min_idx] = size_sorted[i];
+        size_sorted[i] = tmp;
+    }
+
     const bundle_data: TypeInfo.Struct = .{
         .layout = .Auto,
         .fields = fields: {
             comptime var arr: [field_len]TypeInfo.StructField = undefined;
 
-            inline for (info.Struct.fields) |field, idx| {
+            inline for (info.Struct.fields) |field, pos| {
+                const idx = size_sorted[pos].idx;
                 comptime var field_type: type = undefined;
                 if (is_types) {
                     field_type = comp_types[idx];
@@ -29,9 +77,9 @@ pub fn typeFromBundle(comptime comp_types: anytype) type {
                     .field_type = field_type,
                     .default_value = std.mem.zeroInit(field_type, .{}),
                     .is_comptime = false,
-                    .alignment = field.alignment,
+                    .alignment = info.Struct.fields[pos].alignment,
                 };
-                arr[idx] = new_field;
+                arr[pos] = new_field;
             }
 
             break :fields &arr;
@@ -43,7 +91,7 @@ pub fn typeFromBundle(comptime comp_types: anytype) type {
     return @Type(bundle_info);
 }
 
-test "type generation" {
+test "new type" {
     const eql = std.mem.eql;
     const expect = std.testing.expect;
 
@@ -53,16 +101,37 @@ test "type generation" {
     const p = Point{ .x = 1, .y = 2 };
     const v = Velocity{ .dir = 7, .magnitude = 8 };
 
-    const bundle1 = .{ p, v };
+    const bundle1 = .{ @TypeOf(p), @TypeOf(v) };
 
     // Create a basic Bundle
-    const Type1 = typeFromBundle(bundle1);
-    const info1 = @typeInfo(Type1);
-    const fields1 = info1.Struct.fields;
-    expect(eql(u8, fields1[0].name, "Point"));
-    expect(fields1[0].field_type == Point);
-    expect(eql(u8, fields1[1].name, "Velocity"));
-    expect(fields1[1].field_type == Velocity);
+    const Type = typeFromBundle(bundle1);
+    const fields = @typeInfo(Type).Struct.fields;
+    expect(eql(u8, fields[0].name, "Point"));
+    expect(fields[0].field_type == Point);
+    expect(eql(u8, fields[1].name, "Velocity"));
+    expect(fields[1].field_type == Velocity);
+}
+
+test "size sorted" {
+    const expect = std.testing.expect;
+
+    const A = struct { val: u8 };
+    const B = struct { val: u32 };
+
+    {
+        const Type = typeFromBundle(.{ A, B });
+        const fields = @typeInfo(Type).Struct.fields;
+        expect(fields[0].field_type == B);
+        expect(fields[1].field_type == A);
+    }
+
+    {
+        const bundle = .{ A{ .val = 1 }, B{ .val = 2 } };
+        const Type = typeFromBundle(bundle);
+        const fields = @typeInfo(Type).Struct.fields;
+        expect(fields[0].field_type == B);
+        expect(fields[1].field_type == A);
+    }
 }
 
 // Coerce a tuple to the given type (used to convert tuple to type from above)

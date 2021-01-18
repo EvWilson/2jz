@@ -10,7 +10,7 @@ pub const c = @cImport({
 });
 
 // Component type declarations
-const Id = struct { id: u32 };
+const Id = struct { id: u8 };
 const Movespeed = struct { speed: u32 };
 const Position = struct { x: i32, y: i32 };
 const Size = struct { w: i32, h: i32 };
