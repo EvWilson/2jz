@@ -55,6 +55,11 @@ lines. The archetype helps to group your heterogeneous data together as densely
 as possible, allowing for efficient memory access and minimal need for the
 cross-referencing data structures you get otherwise.
 
+### Examples
+Check out the examples directory to get a feel for what usage might look like in
+practice. At the time of writing, this includes a Pong game written with SDL,
+and is a great example of Zig's fantastic C integration story.
+
 ### Acknowledgements
 I'd love to be able to take a moment to give a huge thank you to the Zig
 community for being such an awesome bunch of helpful hackers and tinkerers.
