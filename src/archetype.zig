@@ -8,7 +8,7 @@ const MaskType = comptime_utils.MaskType;
 const IdType = comptime_utils.IdType;
 const Entity = @import("./entities.zig").Entity;
 
-// Inspired by Alex Naskos' Runtime Polymorphism talk, 14:53
+// Inspired by Alex Naskos' Runtime Polymorphism talk, on YouTube, @14:53
 // This is entirely a proxy object for types returned by ArchetypeGen below,
 // used to provide an interface over the produced structs.
 // For archetype's operation, see ArchetypeGen.
