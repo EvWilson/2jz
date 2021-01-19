@@ -22,6 +22,7 @@ pub const Archetype = struct {
         put: fn (usize, Entity, usize) bool,
         remove: fn (usize, Entity) bool,
         typeAt: fn (usize, []const u8, usize) usize,
+        typeForEntity: fn (usize, []const u8, IdType) usize,
     };
     alloc: *Allocator,
     vtable: *const VTable,
@@ -53,6 +54,10 @@ pub const Archetype = struct {
 
     pub fn typeAt(self: @This(), typename: []const u8, elem_idx: usize) usize {
         return self.vtable.typeAt(self.object, typename, elem_idx);
+    }
+
+    pub fn typeForEntity(self: @This(), typename: []const u8, ent_id: IdType) usize {
+        return self.vtable.typeForEntity(self.object, typename, ent_id);
     }
 
     // This function and the one below are what set up the dynamic reference to
@@ -113,6 +118,13 @@ pub const Archetype = struct {
                         return ret_ptr;
                     }
                 }.typeAt,
+                .typeForEntity = struct {
+                    fn typeForEntity(ptr: usize, typename: []const u8, ent_id: IdType) usize {
+                        const self = @intToPtr(PtrType, ptr);
+                        const ret_ptr = @call(.{ .modifier = .always_inline }, std.meta.Child(PtrType).typeForEntity, .{ self, typename, ent_id });
+                        return ret_ptr;
+                    }
+                }.typeForEntity,
             },
             .object = @ptrToInt(arch),
         };
@@ -236,6 +248,25 @@ pub fn ArchetypeGen(comptime Bundle: type) type {
             return @ptrToInt(bundle) + offset;
         }
 
+        // A companion to the above method that works of an entity id rather
+        // than a specified index.
+        fn typeForEntity(self: *Self, typename: []const u8, ent_id: IdType) usize {
+            var i: usize = 0;
+            while (i < self.cursor) : (i += 1) {
+                if (self.entities[i].id == ent_id) {
+                    break;
+                }
+            }
+            // Zero value can be assumed to be a bad pointer at higher levels
+            // (Entity not found)
+            if (i == self.cursor) {
+                return 0;
+            }
+            const offset = SizeCalc.offset(typename);
+            const bundle: *Bundle = &self.type_mem[i];
+            return @ptrToInt(bundle) + offset;
+        }
+
         // Returns the entity data stored at the given index
         fn entityAt(self: *Self, idx: usize) Entity {
             return self.entities[idx];
@@ -311,7 +342,8 @@ test "basic" {
 
     // `put` testing
     expect(arch.cursor == 0);
-    expect(arch.put(.{ .id = 0, .location = 1 }, .{ .Point = p, .Velocity = v }));
+    const ent = Entity{ .id = 0, .location = 1 };
+    expect(arch.put(ent, .{ .Point = p, .Velocity = v }));
     expect(arch.cursor == 1);
 
     // Get with type
@@ -328,10 +360,24 @@ test "basic" {
     expect(point.x == 11);
     expect(point.y == 2);
     // Velocity
-    const vel_ptr: usize = arch.typeAt(@typeName(Velocity), 0);
-    const vel: *Velocity = @intToPtr(*Velocity, vel_ptr);
+    var vel_ptr: usize = arch.typeAt(@typeName(Velocity), 0);
+    var vel: *Velocity = @intToPtr(*Velocity, vel_ptr);
     expect(vel.dir == 3);
     expect(vel.magnitude == 4);
+
+    // Get with entity
+    // Point
+    point_ptr = arch.typeForEntity(@typeName(Point), ent.id);
+    point = @intToPtr(*Point, point_ptr);
+    expect(point.x == 11);
+    expect(point.y == 2);
+    // Velocity
+    vel_ptr = arch.typeForEntity(@typeName(Velocity), ent.id);
+    vel = @intToPtr(*Velocity, vel_ptr);
+    expect(vel.dir == 3);
+    expect(vel.magnitude == 4);
+    // Check that we can get an error case
+    expect(arch.typeForEntity(@typeName(Point), 1000) == 0);
 }
 
 test "storage resizing" {

@@ -16,8 +16,11 @@ const Entities = ent_file.Entities;
 // Possible errors that can arise from operation
 const ECSError = error{ BadSpawn, InvalidIterator, NoSuchEntity };
 
-// The main encompassing struct for the library, its methods are effectively the
-// API to the library.
+/// The main encompassing struct for the library, its methods are effectively
+/// the API to the library.
+/// Documentation comments are provided, but for a quicker introduction to the
+/// library's usage, check out the integration tests provided. They are
+/// generally self-contained and concisely explanatory.
 pub const World = struct {
     const Self = @This();
     const DEFAULT_CAPACITY = 1024;
@@ -29,10 +32,11 @@ pub const World = struct {
     mask_map: StringHashMap(MaskType),
     entities: Entities,
 
+    /// This and the below are used to create a new World instance. The only
+    /// difference is whether or not you'd like to specify an initial capacity.
     pub fn init(allocator: *Allocator, comptime registry: anytype) !Self {
         return Self.initCapacity(allocator, Self.DEFAULT_CAPACITY, registry);
     }
-
     pub fn initCapacity(allocator: *Allocator, capacity: usize, comptime registry: anytype) !Self {
         var comp_map = StringHashMap(MaskType).init(allocator);
         comptime var mask_val = 1;
@@ -50,6 +54,7 @@ pub const World = struct {
         };
     }
 
+    /// Cleanup for a World instance, to be paired with each init call
     pub fn deinit(self: *Self) void {
         var it = self.arch_map.iterator();
         while (it.next()) |entry| {
@@ -60,11 +65,16 @@ pub const World = struct {
         self.entities.deinit();
     }
 
+    /// This and the below method are used for placing new data into the world.
+    /// Checks that the data passed is of the expected type - a tuple of
+    /// structs.
+    /// The `with mask` version can be used to avoid recomputing the component
+    /// mask if being called repeatedly, as within a system. This mechanism
+    /// should hopefully eventually be moved to compile time.
     pub fn spawn(self: *Self, comptime args: anytype) !Entity {
         const mask = self.componentMask(args);
         return self.spawnWithMask(mask, args);
     }
-
     pub fn spawnWithMask(self: *Self, mask: MaskType, comptime args: anytype) !Entity {
         const BundleType = comptime_utils.typeFromBundle(args);
         const bundle = comptime_utils.coerceToBundle(BundleType, args);
@@ -83,15 +93,48 @@ pub const World = struct {
         return ent;
     }
 
+    /// Used to find the data associated with a specific entity, mainly with the
+    /// intention for usage with `singleton components` that represent special
+    /// game objects - potentially a camera or global timer.
+    /// Not recommended for general purpose use as it involved a linear scan
+    /// over the entities in an archetype.
+    pub fn entityData(self: *Self, entity: Entity, comptime T: type) ECSError!T {
+        const maybe_arch = self.arch_map.get(entity.location);
+        if (maybe_arch) |arch| {
+            const type_ptr: usize = arch.typeForEntity(@typeName(T), entity.id);
+            if (type_ptr == 0) {
+                return ECSError.NoSuchEntity;
+            }
+            return @intToPtr(*T, type_ptr).*;
+        } else {
+            return ECSError.NoSuchEntity;
+        }
+    }
+    pub fn entityDataMut(self: *Self, entity: Entity, comptime T: type) ECSError!*T {
+        const maybe_arch = self.arch_map.get(entity.location);
+        if (maybe_arch) |arch| {
+            const type_ptr: usize = arch.typeForEntity(@typeName(T), entity.id);
+            if (type_ptr == 0) {
+                return ECSError.NoSuchEntity;
+            }
+            return @intToPtr(*T, type_ptr);
+        } else {
+            return ECSError.NoSuchEntity;
+        }
+    }
+
+    /// Create a query iterator to traverse the world state.
+    /// Has the same `with mask` variant to reduce computation in a loop.
     pub fn query(self: *Self, comptime args: anytype) ECSError!Iterator {
         const mask = self.componentMask(args);
         return self.queryWithMask(mask, args);
     }
-
     pub fn queryWithMask(self: *Self, mask: MaskType, comptime args: anytype) ECSError!Iterator {
         return Iterator.init(self, mask);
     }
 
+    /// Remove the given entity and its associated component data from the World
+    /// instance.
     pub fn remove(self: *Self, entity: Entity) bool {
         var maybe_arch = self.arch_map.get(entity.location);
         if (maybe_arch) |arch| {
@@ -101,6 +144,7 @@ pub const World = struct {
         }
     }
 
+    /// Create a bitmask from the provided tuple of struct data.
     pub fn componentMask(self: *Self, comptime component_tuple: anytype) MaskType {
         comptime var isType = true;
         const info = @typeInfo(@TypeOf(component_tuple[0]));
@@ -136,21 +180,35 @@ test "world test" {
     var world = try World.init(allocator, .{ Point, Velocity, HitPoints });
     defer world.deinit();
 
+    // Spawn entities
     var ent = try world.spawn(.{p});
     var ent2 = try world.spawn(.{Point{ .x = 3, .y = 4 }});
 
+    // Check that component mask creation works for structs and types
     const mask = world.componentMask(.{ Point, Velocity });
     const mask2 = world.componentMask(.{ p, v });
     expect(mask == mask2);
 
+    // Check that we can get entity data
+    // Careful about using these methods, check documentation comments on them
+    var query = try world.query(.{Point});
+    expect(query.next());
+    const pt: Point = try world.entityData(ent, Point);
+    expect(pt.x == 2);
+    expect(pt.y == 3);
+    const pt2: *Point = try world.entityDataMut(ent2, Point);
+    expect(pt2.x == 3);
+    expect(pt2.y == 4);
+
+    // Ensure cursor seems to be working correctly with remove
     const old_cursor = world.arch_map.get(world.componentMask(.{p})).?.cursor();
     expect(world.remove(ent));
     expect(world.arch_map.get(world.componentMask(.{p})).?.cursor() == old_cursor - 1);
 }
 
-// Used to create systems.
-// Users query a World instance and receive one of these in response, with which
-// they're able to loop over the world state and access the data for each entity
+/// Used to create systems.
+/// Users query a World instance and receive one of these in response, with which
+/// they're able to loop over the world state and access the data for each entity
 const Iterator = struct {
     const Self = @This();
     const IterType = World.ArchetypeMap.Iterator;
