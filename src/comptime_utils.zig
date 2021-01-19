@@ -163,8 +163,8 @@ test "coercion test" {
 }
 
 // Ensure that all elements of a tuple are either types or structs
-// Usefull for checking inbound tuples at API edge
-fn assertTypeAndOrdering(arch: anytype) void {
+// Useful for checking inbound tuples at API edge
+pub fn assertTupleFormat(arch: anytype) void {
     const arch_info = @typeInfo(@TypeOf(arch));
     if (arch_info != .Struct or !arch_info.Struct.is_tuple) {
         @compileError("expecting tuple to be passed, got " ++ @typeName(@TypeOf(arch)));
@@ -175,29 +175,15 @@ fn assertTypeAndOrdering(arch: anytype) void {
     const first_type = arch_info.Struct.fields[0].field_type;
     const type_info = @typeInfo(first_type);
     if (type_info == .Struct) {
-        inline for (arch_info.Struct.fields) |field, idx| {
+        inline for (arch_info.Struct.fields) |field| {
             if (@typeInfo(field.field_type) != .Struct) {
                 @compileError("expecting all tuple elements to be structs, found type " ++ @typeName(field.field_type));
             }
-            if (idx == 0) continue;
-            comptime const field1 = @typeName(arch_info.Struct.fields[idx - 1].field_type);
-            comptime const field2 = @typeName(field.field_type);
-            comptime const ordered = std.mem.order(u8, field1, field2) == std.math.Order.lt;
-            if (!ordered) {
-                @compileError("component structs must be lexicographically ordered");
-            }
         }
     } else if (type_info == .Type) {
-        inline for (arch_info.Struct.fields) |field, idx| {
+        inline for (arch_info.Struct.fields) |field| {
             if (@typeInfo(field.field_type) != .Type) {
                 @compileError("expecting all tuple elements to be types, found type " ++ @typeName(field.field_type));
-            }
-            if (idx == 0) continue;
-            comptime const field1 = @typeName(arch_info.Struct.fields[idx - 1].default_value.?);
-            comptime const field2 = @typeName(field.default_value.?);
-            comptime const ordered = std.mem.order(u8, field1, field2) == std.math.Order.lt;
-            if (!ordered) {
-                @compileError("component types must be lexicographically ordered");
             }
         }
     } else {
@@ -211,8 +197,12 @@ test "ordered tuples" {
     const Velocity = struct { dir: u6, magnitude: u8 };
 
     const type_tup = .{ Point, Velocity };
-    assertTypeAndOrdering(type_tup);
+    assertTupleFormat(type_tup);
 
     const comp_tup = .{ Point{ .x = 3, .y = 4 }, Velocity{ .dir = 2, .magnitude = 100 } };
-    assertTypeAndOrdering(comp_tup);
+    assertTupleFormat(comp_tup);
+
+    // This test should fail, commented out to not fail tests normally
+    //const mixed_tup = .{ Point{ .x = 1, .y = 2 }, Velocity };
+    //assertTupleFormat(mixed_tup);
 }

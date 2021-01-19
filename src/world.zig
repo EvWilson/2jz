@@ -38,6 +38,11 @@ pub const World = struct {
         return Self.initCapacity(allocator, Self.DEFAULT_CAPACITY, registry);
     }
     pub fn initCapacity(allocator: *Allocator, capacity: usize, comptime registry: anytype) !Self {
+        // Ensure that registry is in expected format
+        comptime_utils.assertTupleFormat(registry);
+
+        // Seed hashmap with mask values for each component type, to generate
+        // bitmasks for component combinations later
         var comp_map = StringHashMap(MaskType).init(allocator);
         comptime var mask_val = 1;
         inline for (registry) |ty| {
@@ -72,10 +77,16 @@ pub const World = struct {
     /// mask if being called repeatedly, as within a system. This mechanism
     /// should hopefully eventually be moved to compile time.
     pub fn spawn(self: *Self, comptime args: anytype) !Entity {
+        // Ensure that args are in expected format
+        comptime_utils.assertTupleFormat(args);
+
         const mask = self.componentMask(args);
         return self.spawnWithMask(mask, args);
     }
     pub fn spawnWithMask(self: *Self, mask: MaskType, comptime args: anytype) !Entity {
+        // Ensure that args are in expected format
+        comptime_utils.assertTupleFormat(args);
+
         const BundleType = comptime_utils.typeFromBundle(args);
         const bundle = comptime_utils.coerceToBundle(BundleType, args);
         const ent = try self.entities.alloc(mask);
@@ -126,10 +137,16 @@ pub const World = struct {
     /// Create a query iterator to traverse the world state.
     /// Has the same `with mask` variant to reduce computation in a loop.
     pub fn query(self: *Self, comptime args: anytype) ECSError!Iterator {
+        // Ensure that args are in expected format
+        comptime_utils.assertTupleFormat(args);
+
         const mask = self.componentMask(args);
         return self.queryWithMask(mask, args);
     }
     pub fn queryWithMask(self: *Self, mask: MaskType, comptime args: anytype) ECSError!Iterator {
+        // Ensure that args are in expected format
+        comptime_utils.assertTupleFormat(args);
+
         return Iterator.init(self, mask);
     }
 
@@ -146,14 +163,16 @@ pub const World = struct {
 
     /// Create a bitmask from the provided tuple of struct data.
     pub fn componentMask(self: *Self, comptime component_tuple: anytype) MaskType {
+        // Ensure that args are in expected format
+        comptime_utils.assertTupleFormat(component_tuple);
+
+        // Determine if we're operating on types or structs
         comptime var isType = true;
-        const info = @typeInfo(@TypeOf(component_tuple[0]));
-        if (info == .Struct) {
+        if (@typeInfo(@TypeOf(component_tuple[0])) == .Struct) {
             isType = false;
-        } else if (info != .Type) {
-            @compileError("component tuple had erroneous type: " ++ @TypeOf(component_tuple[0]));
         }
 
+        // Build the bitmask using all provided component types
         var mask: MaskType = 0;
         inline for (component_tuple) |field| {
             if (isType) {
