@@ -275,7 +275,7 @@ pub fn ArchetypeGen(comptime Bundle: type) type {
         // Remove the given entity id
         fn remove(self: *Self, entity: Entity) bool {
             var idx: usize = 0;
-            while (idx != self.cursor + 1) : (idx += 1) {
+            while (idx != self.cursor) : (idx += 1) {
                 if (self.entities[idx].id == entity.id) {
                     self.removeIdx(idx);
                     return true;
@@ -288,8 +288,8 @@ pub fn ArchetypeGen(comptime Bundle: type) type {
         // Copies bundle at end of array to indicated location and decrements
         // cursor
         fn removeIdx(self: *Self, idx: usize) void {
-            self.type_mem[idx] = self.type_mem[self.cursor];
-            self.entities[idx] = self.entities[self.cursor];
+            self.type_mem[idx] = self.type_mem[self.cursor - 1];
+            self.entities[idx] = self.entities[self.cursor - 1];
             self.cursor -= 1;
         }
 

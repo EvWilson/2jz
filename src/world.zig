@@ -5,7 +5,8 @@ const ArrayList = std.ArrayList;
 const StringHashMap = std.StringHashMap;
 
 const comptime_utils = @import("./comptime_utils.zig");
-const MaskType = comptime_utils.MaskType;
+pub const MaskType = comptime_utils.MaskType;
+pub const IdType = comptime_utils.IdType;
 const arch_file = @import("./archetype.zig");
 const Archetype = arch_file.Archetype;
 const ArchetypeGen = arch_file.ArchetypeGen;
