@@ -1,5 +1,8 @@
 # 2JZ
 
+## Hey!
+Thanks for coming through and taking a look at this repo. As you might be able to tell, it's a good bit out of date and I don't really have any plans to maintain or update it at any point, so this is likely the last note I'll leave here. For those wanting to potentially make use of this in the future for whatever reason (likely me, wanting to demo to someone) the 0.7.0 release from https://ziglang.org/download/ seems to work for the Pong demo.
+
 An archetype-based entity-component-system(ECS) library in Zig, inspired by
 [hecs](https://github.com/Ralith/hecs) and the many other delightful ECS
 libraries of the world. I'd highly recommend reading the README there for more
